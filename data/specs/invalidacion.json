@@ -1,0 +1,44 @@
+{
+	"identificacion": {
+		"version": 3,
+		"ambiente": "00",
+		"codigoGeneracion": "B4C7D2E9-A1F3-5B6C-8D0E-2F4A6B8C0D2E",
+		"fecEmi": "2026-08-28",
+		"horEmi": "10:45:00",
+		"fusion": null
+	},
+	"emisor": {
+		"code": "PBS",
+		"nit": "06141704670022",
+		"nombre": "PRODUCTIVE BUSINESS SOLUTIONS EL SALVADOR, SA DE CV",
+		"codEstableMH": "M001",
+		"codEstable": null,
+		"codPuntoVentaMH": "P001",
+		"codPuntoVenta": null,
+		"telefono": "22393000",
+		"correo": "ernesto.guevara@grouppbs.com"
+	},
+	"documento": {
+		"tipoDte": "01",
+		"codigoGeneracion": "E9B3C4D4-F6A7-7B8C-9D1E-4F3A4B5C6D8E",
+		"selloRecibido": "2026BFA39E2E32A04ED997D583A2503CAB590WEG",
+		"numeroControl": "DTE-01-M001P001-000000000032399",
+		"fecEmi": "2026-08-28",
+		"codigoGeneracionR": null,
+		"tipoDocumento": "13",
+		"numDocumento": "020304056",
+		"nombre": "RENE STEVE FLORES QUINTANILLA",
+		"telefono": "75001122",
+		"correo": "steve.quintanilla@pbs.group"
+	},
+	"motivo": {
+		"tipoAnulacion": 2,
+		"motivoAnulacion": "Error en el precio unitario consignado del documento original",
+		"nombreResponsable": "Ernesto Sanchez",
+		"tipDocResponsable": "13",
+		"numDocResponsable": "049512220",
+		"nombreSolicita": "Rene Flores",
+		"tipDocSolicita": "13",
+		"numDocSolicita": "090305050"
+	}
+}

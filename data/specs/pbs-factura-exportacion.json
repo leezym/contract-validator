@@ -1,0 +1,111 @@
+{
+	"identificacion": {
+		"version": 3,
+		"ambiente": "00",
+		"tipoDte": "11",
+		"numeroControl": "DTE-11-M001P001-000000000000633",
+		"codigoGeneracion": "A3B9C4D4-E5F6-7A8B-9C0D-1E2F3A4B5C8D",
+		"tipoModelo": 1,
+		"tipoOperacion": 1,
+		"tipoContingencia": null,
+		"motivoContin": null,
+		"fecEmi": "2026-08-24",
+		"horEmi": "11:20:00",
+		"tipoMoneda": "USD"
+	},
+	"documentoRelacionado": null,
+	"emisor": {
+		"code": "PBS",
+		"nit": "06141704670022",
+		"nrc": "3050",
+		"nombre": "PRODUCTIVE BUSINESS SOLUTIONS EL SALVADOR, SA DE CV",
+		"codActividad": "46510",
+		"descActividad": "Venta al por mayor de computadoras, equipo periferico y programas informaticos",
+		"nombreComercial": "PBS EL SALVADOR, SA DE CV",
+		"direccion": {
+			"departamento": "06",
+			"municipio": "23",
+			"distrito": "14",
+			"complemento": "Alameda Manuel Enrique Araujo, local 5, San Salvador Centro"
+		},
+		"telefono": "22550011",
+		"correo": "ernesto.guevara@grouppbs.com",
+		"codEstable": null,
+		"codPuntoVenta": null,
+		"tipoItemExpor": 1,
+		"recintoFiscal": "01",
+		"tipoRegimen": "EX-1",
+		"regimen": "1000.000"
+	},
+	"receptor": {
+		"nombre": "GLOBAL TRADING LOGISTICS LLC",
+		"tipoDocumento": "37",
+		"numDocumento": "95-4482103",
+		"descActividad": "Distribucion internacional de mercancias",
+		"nombreComercial": "Global Trading",
+		"codPais": "US",
+		"nombrePais": "Estados Unidos",
+		"complemento": "1024 Industrial Boulevard, Suite 500, Miami, Florida",
+		"tipoPersona": 2,
+		"telefono": "+13055550199",
+		"correo": "steve.quintanilla@pbs.group"
+	},
+	"otrosDocumentos": null,
+	"ventaTercero": null,
+	"compraTercero": null,
+	"cuerpoDocumento": [
+		{
+			"numItem": 1,
+			"tipoItem": 1,
+			"numeroDocumento": null,
+			"codigo": "CAM-COT-05",
+			"codTributo": null,
+			"cantidad": 1000.0,
+			"uniMedida": 25,
+			"descripcion": "Camisas de algodon 100% premium tipo Polo para caballero",
+			"precioUni": 8.5,
+			"montoDescu": 0.0,
+			"ventaGravada": 8500.0,
+			"tributos": [
+				"C3"
+			],
+			"noGravado": 0.0
+		}
+	],
+	"resumen": {
+		"totalGravada": 8500.0,
+		"descuGravada": 0.0,
+		"porcentajeDescuento": 0.0,
+		"totalDescu": 0.0,
+		"seguro": 150.0,
+		"flete": 350.0,
+		"tributos": [
+			{
+				"codigo": "C3",
+				"descripcion": "Impuesto al Valor Agregado 0% (Exportaciones)",
+				"valor": 0.0
+			}
+		],
+		"montoTotalOperacion": 9000.0,
+		"totalNoGravado": 0.0,
+		"totalNoOnerosas": 0.0,
+		"totalPagar": 9000.0,
+		"totalLetras": "NUEVE MIL 00/100 USD",
+		"saldoFavor": 0.0,
+		"condicionOperacion": 2,
+		"pagos": [
+			{
+				"codigo": "02",
+				"montoPago": 9000.0,
+				"referencia": "Transferencia internacional SWIFT",
+				"plazo": "01",
+				"periodo": 30
+			}
+		],
+		"codIncoterms": "01",
+		"descIncoterms": "EXW-En fabrica",
+		"numPagoElectronico": null,
+		"observaciones": "Exportacion definitiva tramitada bajo regimen preferencial centroamericano."
+	},
+	"apendice": null
+}

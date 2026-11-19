@@ -1,0 +1,13 @@
+# Credenciales del proyecto (usuario y contraseña de Oracle): NUNCA versionar
+.env
+.env.*
+!.env.example
+# Conexión local a Oracle (sin contraseña, pero con datos del entorno)
+config/*.local.json
+# Reportes y exports de la BD: contienen datos reales (NIT, nombres, montos)
+reports/
+*.tsv
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/

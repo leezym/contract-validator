@@ -1,0 +1,7 @@
+{
+  "_comentario": "Copie este archivo a config/oracle.local.json y complete. NUNCA ponga la contraseña aquí: use la variable de entorno CV_ORACLE_PASSWORD. Use 'sid' o 'service' (no ambos), o en su lugar 'dsn'.",
+  "host": "servidor.empresa.com",
+  "port": 1521,
+  "sid": "NOMBRE_SID",
+  "user": "usuario_solo_lectura"
+}

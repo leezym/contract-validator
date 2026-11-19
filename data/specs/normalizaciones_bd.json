@@ -1,0 +1,8 @@
+{
+  "estado": "APROBADO por el usuario el 2026-11-16. Solo lo listado aquí se acepta como 'igual' entre el valor esperado (BD) y JSON/XML/PDF; todo lo demás es DB_MISMATCH_*.",
+  "tolerancia_montos": 0.01,
+  "tolerancia_montos_detalle": "Montos numéricos que difieren hasta 0.01 se aceptan. Motivo: el generador resta la retención sin redondear (VALOR x 1%) y DOC.RETENCION está redondeada; p. ej. NDB montoTotalOperacion 9617.03 (BD) vs 9617.04 (documento).",
+  "mapeo_aprobado": "Filas DIRECTA, TRANSFORMACION y CATALOGO de data/specs/mapeo_bd.xlsx (aprobado = SI); SIN_FUENTE = DB_MISSING.",
+  "tolerancia_hora_segundos": 120,
+  "tolerancia_hora_segundos_detalle": "Horas HH:MM:SS (identificacion.horEmi / Encabezado.horaEmision) que difieren hasta 120 s se aceptan. Motivo: el generador usa SYSDATE - 1 h al armar el XML y la BD solo guarda DOC_EXTENDIDO.FEC_AUTORIZA, unos segundos después (8 a 38 s en los 7 JSON certificados). APROBADO por el usuario el 2026-11-17 (120 s)."
+}

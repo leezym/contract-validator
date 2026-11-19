@@ -1,0 +1,18 @@
+{
+  "descripcion": "Excepciones a contrato_ejemplo.xlsx indicadas por el usuario. 'build' aplica 'reglas_generales' y luego 'ajustes' sobre lo que genera el libro y los deja en la hoja 'ajustes' del plano. Hoy están vigentes 'catalogos_como_string' y 'decimales_equivalentes'.",
+  "reglas_generales": {
+    "catalogos_como_string": {
+      "activo": true,
+      "motivo": "No se requieren campos con listas de valores: los campos que en el libro tienen un catálogo se generan como string y no se valida la lista. En el JSON también se acepta un número sin comillas.",
+      "evidencia": "Indicación del usuario (2026-11-18)",
+      "aprobado": "2026-11-18"
+    },
+    "decimales_equivalentes": {
+      "activo": true,
+      "motivo": "En el cruce XML<->JSON, los valores numéricos presentes en ambos con el mismo valor y distinto formato decimal (285.6 vs 285.60, 2260 vs 2260.00) son iguales: no generan error ni aviso.",
+      "evidencia": "Indicación del usuario (2026-11-18)",
+      "aprobado": "2026-11-18"
+    }
+  },
+  "ajustes": []
+}

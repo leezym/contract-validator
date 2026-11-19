@@ -1,0 +1,97 @@
+{
+  "estado": "PROPUESTA INICIAL - pendiente de aprobacion. Solo lo listado aqui se acepta como 'igual' entre PDF y XML; todo lo demas es PDF_MISMATCH.",
+  "normalizaciones": {
+    "fechas": true,
+    "fechas_detalle": "DD/MM/YYYY y YYYY/MM/DD se leen como YYYY-MM-DD (el PDF MINH imprime 13/11/2026; el XML 2026-11-13)",
+    "numeros": true,
+    "numeros_detalle": "se ignora el separador de miles (1,603.69 = 1603.69) y los ceros decimales finales (285.6000 = 285.60; 35.00 = 35). Los enteros con ceros a la izquierda (001918) NO se alteran",
+    "identificadores": true,
+    "identificadores_detalle": "se ignoran guiones y espacios en numeros como NIT/NRC/telefono (0501-091219-101-3 = 05010912191013; 2248-5100 = 22485100)",
+    "texto_ignorar_acentos": false,
+    "texto_ignorar_mayusculas": false
+  },
+  "catalogos": {
+    "fuente": "Excel, columna Observaciones: tipoModelo 'CAT-003 (1 previo / 2 diferido-contingencia)'; tipoOperacion 'CAT-004 normal/contingencia'",
+    "DatosEntrada.Encabezado.versionFormato": {
+      "1": "Previo",
+      "2": "Diferido"
+    },
+    "DatosEntrada.Encabezado.tipoOperacion": {
+      "1": "Normal",
+      "2": "Contingencia"
+    },
+    "DatosEntrada.InformacioGeneral.InformacionEmisor.recintoFiscal": {
+      "01": "Terrestre San Bartolo",
+      "02": "Maritima de Acajutla",
+      "03": "Aerea Monseñor Oscar Arnulfo Romero",
+      "04": "Terrestre Las Chinamas",
+      "05": "Terrestre La Hachadura",
+      "06": "Terrestre Santa Ana",
+      "07": "Terrestre San Cristobal",
+      "08": "Terrestre Anguiatu",
+      "09": "Terrestre El Amatillo",
+      "10": "Maritima La Union (Puerto Cutuco)",
+      "11": "Terrestre El Poy",
+      "12": "Aduana Terrestre Metalio",
+      "76": "DHL",
+      "99": "San Bartolo Envio Hn/Gt"
+    },
+    "DatosEntrada.InformacioGeneral.InformacionEmisor.regimen": {
+      "EX-1.1000.000": "Exportación Definitiva, Régimen Común",
+      "EX-1.1048.031": "Exportación Definitiva Proveniente de Franquicia Definitiva, Distribución Internacional",
+      "EX-1.1048.032": "Exportación Definitiva Proveniente de Franquicia Definitiva, Operaciones Internacionales de Logística",
+      "EX-1.1300.000": "Exportación Definitiva Envíos que requieren despacho urgente, Régimen Común",
+      "EX-1.1400.000": "Exportación Definitiva Courier, Régimen Común",
+      "EX-1.1400.011": "Exportación Definitiva Courier, Muestras Sin Valor Comercial",
+      "EX-1.1400.012": "Exportación Definitiva Courier, Material Publicitario",
+      "EX-1.1400.017": "Exportación Definitiva Courier, Declaración de Documentos",
+      "EX-3.3050.000": "Reexportación Proveniente de Importación Temporal, Régimen Común"
+    },
+    "fuente_exportacion": "Aprobado por el usuario 2026-11-17. recintoFiscal: VENTASTQ.FE_PARAMETROS (PARAMETRO=RECINTO_FISCAL, MINHACIENDA); verificado contra PDF MINH solo '01' (EXP_SAL_MINH_532201001261111000315); en '03' la BD guarda 'Monse?or' y se restauró la ñ. regimen: solo el código visto impreso en ese PDF; las descripciones de FE_PARAMETROS (REGIMEN) no coinciden con el texto del PDF (sin tildes/abreviadas), por eso los demás códigos no se agregan hasta verlos impresos."
+  },
+  "no_impreso": {
+    "descripcion": "Tags del XML que el PDF no imprime tal cual (codigos de catalogo, datos de servicio). No se exige que aparezcan. Ajuste esta lista segun el diseno del PDF.",
+    "prefijos": [
+      "CabeceraEntrada."
+    ],
+    "tags": [
+      "DatosEntrada.Encabezado.ambiente",
+      "DatosEntrada.Encabezado.tipoContingencia",
+      "DatosEntrada.Encabezado.tipoFactura",
+      "DatosEntrada.Encabezado.numeroInterno",
+      "DatosEntrada.Contingencia.identificacionContingencia",
+      "DatosEntrada.InformacioGeneral.InformacionEmisor.departamento",
+      "DatosEntrada.InformacioGeneral.InformacionEmisor.municipio",
+      "DatosEntrada.InformacioGeneral.InformacionEmisor.codigoMunicipio",
+      "DatosEntrada.InformacioGeneral.InformacionAdquiriente.departamento",
+      "DatosEntrada.InformacioGeneral.InformacionAdquiriente.municipio",
+      "DatosEntrada.InformacioGeneral.InformacionAdquiriente.codigoMunicipio",
+      "DatosEntrada.InformacioGeneral.InformacionAdquiriente.tipoIdentificacion",
+      "DatosEntrada.InformacioGeneral.InformacionAdquiriente.tipoAdquiriente",
+      "DatosEntrada.InformacioGeneral.InformacionEmisor.codActividad",
+      "DatosEntrada.InformacioGeneral.InformacionAdquiriente.codActividad",
+      "DatosEntrada.Items.unidadMedidaItem",
+      "DatosEntrada.Items.datosTecnicosArticulos",
+      "DatosEntrada.Items.TotalImpuestoItem.Impuestos.tipoImpuesto",
+      "DatosEntrada.TotalImpuestos.TotalImpuesto.Impuestos.tipoImpuesto",
+      "DatosEntrada.Referencia.tipoDocumentoReferencia",
+      "DatosEntrada.Referencia.codigoReferencia",
+      "DatosEntrada.Notas.campo",
+      "DatosEntrada.MediosPago.CodigoPago",
+      "DatosEntrada.MediosPago.tipoPago",
+      "DatosEntrada.MediosPago.codigoReferencia",
+      "DatosEntrada.InformacioGeneral.InformacionEmisor.tipoRegimen",
+      "DatosEntrada.InformacioGeneral.InformacionEmisor.regimen"
+    ]
+  },
+  "catalogos_compuestos": {
+    "descripcion": "El PDF imprime el texto del régimen. Su código es tipoRegimen (abreviado, p. ej. EX-1) + '.' + regimen; fuente: FE_PARAMETROS, parámetro REGIMEN.",
+    "DatosEntrada.InformacioGeneral.InformacionEmisor.regimen": "DatosEntrada.InformacioGeneral.InformacionEmisor.tipoRegimen"
+  },
+  "apendices_impresos": {
+    "descripcion": "Apéndices cuyos datos deben verse en el PDF con su etiqueta (etiquetas y valores del XML o de la BD).",
+    "apendices": [
+      "apendice01"
+    ]
+  }
+}
