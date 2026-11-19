@@ -28,7 +28,9 @@ from decimal import Decimal, InvalidOperation
 from .crosscheck import apendice_records, document_id, strict, xml_values
 from .expected import DB_MISMATCH_JSON, DB_MISMATCH_XML, DB_MISMATCH_PDF, DB_MISSING, Expected
 from .models import Finding, Result, REMOVED
-from .pdf_check import Presentation, _anchors, _label_key, _tok, apendice_pairs, printed_with_label, text_continues
+from .pdf_check import (Presentation, _anchors, _label_key, _tok, apendice_pairs, compare_labeled, format_match,
+                        item_blocks, label_values,
+                        printed_with_label, text_continues)
 from .pdf_text import read_pdf
 
 DEFAULT_MAPEO = os.path.join("data", "specs", "mapeo_bd.xlsx")
@@ -327,6 +329,23 @@ def check_pdf_db(info, exp: dict | None, spec, cfg: BdConfig, pres: Presentation
             if not eq(pdf_val, e_txt):
                 add("ERROR", DB_MISMATCH_PDF, cands[0].path, f"'{m.group(1).strip()}': BD={e_txt!r} PDF={pdf_val!r}")
 
+    # etiquetas del PDF configuradas (etiquetas_pdf): tag XML -> fila JSON de su contraparte
+    for tag, label in pres.labels.items():
+        for j in [j for j in json_rows if j.counterpart == tag]:
+            e = exp.get(j.path)
+            if strict(e) is None or cfg.category(doc_type, j.path) not in APPROVED:
+                continue
+            res.checked += 1
+            out = compare_labeled(pres, e, label_values(info.lines, label))
+            if out is None:
+                continue
+            sev, code, got = out
+            if sev == "WARNING":
+                kind = "mismo valor con otro formato" if code == "PDF_FORMAT_DIFF" else "el PDF lo muestra cortado"
+                add(sev, code, j.path, f"'{label}': BD={e} PDF={got} ({kind})")
+            else:
+                add("ERROR", DB_MISMATCH_PDF, j.path, f"'{label}': BD={e!r} PDF={got or '(no impreso)'!r}")
+
     # apéndices que deben verse en el PDF: cada dato con su etiqueta
     for name in sorted(pres.printed_apendices):
         pairs = apendice_pairs(exp.get(f"{APENDICE}etiqueta[{name}]"), exp.get(f"{APENDICE}valor[{name}]"))
@@ -345,24 +364,23 @@ def check_pdf_db(info, exp: dict | None, spec, cfg: BdConfig, pres: Presentation
     while f"cuerpoDocumento.codigo[{n}]" in exp:
         codes.append(exp[f"cuerpoDocumento.codigo[{n}]"])
         n += 1
-    starts = {}
-    for i, ln in enumerate(info.lines):
-        first = ln.split(" ", 1)[0] if ln.strip() else ""
-        if first in codes and first not in starts:
-            starts[first] = i
-    bounds = sorted(starts.values())
+    blocks = item_blocks(info.lines, codes)
     for n, code in enumerate(codes, 1):
-        if code not in starts:
+        if code not in blocks:
             add("ERROR", DB_MISMATCH_PDF, f"cuerpoDocumento.codigo[{n}]", f"Ítem {n}: el código {code} de la BD no aparece como fila del PDF")
         else:
-            i0 = starts[code]
-            i1 = next((b for b in bounds if b > i0), min(len(info.lines), i0 + 8))
-            row = [pres.canon(_tok(t)) for ln in info.lines[i0:i1] for t in ln.split()]
+            row = [pres.canon(_tok(t)) for ln in blocks[code] for t in ln.split()]
             res.checked += 1
             for name in ("cantidad", "precioUni", "montoDescu"):
                 e = exp.get(f"cuerpoDocumento.{name}[{n}]")
-                if strict(e) is not None and cfg.category(doc_type, f"cuerpoDocumento.{name}") in APPROVED \
-                        and not any(eq(t, e) for t in row):
+                if strict(e) is None or cfg.category(doc_type, f"cuerpoDocumento.{name}") not in APPROVED \
+                        or any(eq(t, e) for t in row):
+                    continue
+                shown = format_match(e, blocks[code])
+                if shown:  # mismo valor con otro formato (menos decimales): aviso, no error
+                    add("WARNING", "PDF_FORMAT_DIFF", f"cuerpoDocumento.{name}[{n}]",
+                        f"Ítem {n} ({code}): {name} BD={e} PDF={shown} (mismo valor con otro formato)")
+                else:
                     add("ERROR", DB_MISMATCH_PDF, f"cuerpoDocumento.{name}[{n}]", f"Ítem {n} ({code}): {name} BD={e} no figura en la fila del PDF")
     return res
 

@@ -1,0 +1,17 @@
+{
+  "descripcion": "Compañías emisoras y el esquema Oracle donde están sus documentos. Antes de consultar la BD se identifica la CIA de cada documento (NIT del emisor, codigoEmpresa o prefijo del nombre del XML) y se consulta solo su esquema. Para agregar una compañía: una entrada nueva con su código CIA, esquema y NIT; el query no cambia.",
+  "companias": {
+    "53": {
+      "nombre": "Tecnoquímicas de El Salvador S.A. de C.V.",
+      "esquema": "VENTASSAL",
+      "nit": ["05010912191013"],
+      "codigo_empresa": []
+    },
+    "41": {
+      "nombre": "Laboratorios Teramed S.A. de C.V.",
+      "esquema": "VENTASSVC",
+      "nit": ["06141105810047"],
+      "codigo_empresa": ["LABTERAMED"]
+    }
+  }
+}

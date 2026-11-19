@@ -4,7 +4,7 @@
   python -m contract_validator audit-mapping [--spec contrato_plano.xlsx] [--doc-type FAC] [--out reports/auditoria_mapeo.xlsx]
   python -m contract_validator [validate] [--pair XML JSON] [--pair-pdf XML PDF] --spec contrato_plano.xlsx archivo.json carpeta/ [--doc-type NDB] [--format text|json] [--out reporte.xlsx]
       [--expected esperados.tsv | --expected-db]   # contenido contra la BD (archivo exportado o consulta directa)
-  python -m contract_validator fetch-expected (--codigo-generacion UUID... | --desde YYYY-MM-DD --hasta YYYY-MM-DD) [--out reports/esperados.tsv]
+  python -m contract_validator fetch-expected (--cia 53 --codigo-generacion UUID... | --desde YYYY-MM-DD --hasta YYYY-MM-DD [--cia 41]) [--out reports/esperados.tsv]
 """
 from __future__ import annotations
 import argparse
@@ -24,7 +24,7 @@ DEFAULT_SPEC = os.path.join("data", "specs", "contrato_plano.xlsx")
 
 # Archivos de configuración del propio validador: al recorrer una carpeta no se tratan como documentos
 CONFIG_FILES = {"pdf_presentacion.json", "normalizaciones_bd.json", "ajustes_contrato.json", "oracle.example.json",
-                "oracle.local.json"}
+                "oracle.local.json", "companias.json"}
 
 
 def collect(inputs):
@@ -95,7 +95,10 @@ def cmd_fetch_expected(argv) -> int:
     from .db_fetch import DEFAULT_SQL, DbFetchError, fetch, write_tsv
     ap = argparse.ArgumentParser(prog="contract_validator fetch-expected",
                                  description="Ejecuta queries/valores_esperados.sql en Oracle (solo lectura) y guarda el resultado")
-    ap.add_argument("--codigo-generacion", nargs="+", metavar="UUID", help="uno o más Códigos de Generación")
+    ap.add_argument("--codigo-generacion", nargs="+", metavar="UUID", help="uno o más Códigos de Generación (de la compañía --cia)")
+    ap.add_argument("--cia", nargs="+", help="compañía(s) a consultar (data/specs/companias.json); obligatoria con "
+                                             "--codigo-generacion; con rango, default: todas las configuradas")
+    ap.add_argument("--companias", help="compañías y esquemas (default: data/specs/companias.json)")
     ap.add_argument("--desde", help="fecha de autorización inicial YYYY-MM-DD (sin --codigo-generacion)")
     ap.add_argument("--hasta", help="fecha de autorización final YYYY-MM-DD")
     ap.add_argument("--max-docs", type=int, default=100, help="tope de documentos por rango (default 100)")
@@ -105,9 +108,15 @@ def cmd_fetch_expected(argv) -> int:
     a = ap.parse_args(argv)
     if not a.codigo_generacion and not (a.desde or a.hasta):
         ap.error("indique --codigo-generacion o un rango --desde/--hasta")
+    if a.codigo_generacion and (not a.cia or len(a.cia) != 1):
+        ap.error("con --codigo-generacion indique la compañía de esos documentos: --cia <código> (p. ej. 53 o 41)")
+    from .companias import CompaniaError, load_companias
     try:
-        rows = fetch(a.codigo_generacion, a.desde, a.hasta, a.max_docs, a.sql, a.db_config)
-    except DbFetchError as e:
+        companias = load_companias(a.companias)
+        cia_of = {u.upper(): a.cia[0] for u in a.codigo_generacion} if a.codigo_generacion else None
+        rows = fetch(a.codigo_generacion, a.desde, a.hasta, a.max_docs, a.sql, a.db_config,
+                     companias=companias, cia_of=cia_of, cias=a.cia)
+    except (DbFetchError, CompaniaError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
     write_tsv(rows, a.out)
@@ -144,6 +153,7 @@ def cmd_validate(argv, verificar: bool = False) -> int:
     ap.add_argument("--db-config", help="conexión Oracle sin contraseña (default: config/oracle.local.json; "
                                         "contraseña en la variable CV_ORACLE_PASSWORD)")
     ap.add_argument("--save-expected", help="con --expected-db: guarda lo consultado en este .tsv (contiene datos reales)")
+    ap.add_argument("--companias", help="compañías (CIA) y su esquema Oracle (default: data/specs/companias.json)")
     ap.add_argument("--mapeo-bd", help="mapeo aprobado BD -> contrato (default: data/specs/mapeo_bd.xlsx)")
     ap.add_argument("--bd-config", help="normalizaciones BD aprobadas (default: data/specs/normalizaciones_bd.json)")
     ap.add_argument("--no-rules", action="store_true", help="omitir la regla de número de control")
@@ -201,33 +211,50 @@ def cmd_validate(argv, verificar: bool = False) -> int:
     unicos = set(uuid_of.values())
     if len(unicos) == 1:  # un PDF MINH que no se pudo leer se asocia al único documento recibido
         uuid_of |= {p: next(iter(unicos)) for p, i in pdf_infos.items() if i.kind == "MINH" and not i.uuid}
-    db_status = ""
+    db_status: dict | str = ""
+    compania_of: dict = {}
     if a.expected or a.expected_db:
         from .db_check import load_bd_config, validate_db
         from .expected import load_expected
         expected = None
         if a.expected_db:
             from .db_fetch import DbFetchError, fetch, write_tsv
-            uuids = sorted(set(uuid_of.values()))
+            from .companias import CompaniaError, identify, load_companias
             try:
-                rows = fetch(uuids, db_config=a.db_config) if uuids else []
+                # 1. compañía de cada documento -> esquema donde se consulta
+                files_by_uuid: dict = {}
+                for f, u in uuid_of.items():
+                    files_by_uuid.setdefault(u, []).append(f)
+                found, sin_cia = identify(files_by_uuid, docs, load_companias(a.companias))
+                compania_of = {u: c.etiqueta for u, c in found.items()}
+                db_status = dict(sin_cia)
+                for u, motivo in sorted(sin_cia.items()):
+                    print(f"AVISO: {u}: {motivo}", file=sys.stderr)
+                for u, c in sorted(found.items()):
+                    print(f"BD: {u} -> {c.etiqueta}", file=sys.stderr)
+                # 2. consulta de solo lectura, una vez por compañía
+                uuids = sorted(found)
+                rows = fetch(uuids, db_config=a.db_config, cia_of={u: c.cia for u, c in found.items()},
+                             companias=load_companias(a.companias)) if uuids else []
                 print(f"BD: {len(uuids)} documento(s) consultado(s), {len(rows)} valor(es) esperado(s)", file=sys.stderr)
                 if a.save_expected:
                     write_tsv(rows, a.save_expected)
                 expected = load_expected(rows)
-            except DbFetchError as e:  # sin BD se valida igual la estructura; la información queda NO VERIFICADA
+            except (DbFetchError, CompaniaError, OSError) as e:  # sin BD se valida igual la estructura; la información queda NO VERIFICADA
                 db_status = f"no se pudo consultar la BD: {e}"
                 print(f"AVISO: {db_status}", file=sys.stderr)
         else:
             expected = load_expected(a.expected)
         if expected is not None:
-            results += validate_db(expected, docs, db_pdfs, spec,
+            sin_cia = db_status if isinstance(db_status, dict) else {}  # sin compañía identificada: no se consultaron
+            results += validate_db(expected, {f: d for f, d in docs.items() if uuid_of.get(f) not in sin_cia},
+                                   [p for p in db_pdfs if uuid_of.get(p) not in sin_cia], spec,
                                    load_bd_config(a.mapeo_bd, a.bd_config), load_presentation(a.pdf_config),
                                    (a.doc_type or "").upper())
     else:
         db_status = "no se solicitó comparar contra la BD (use 'verificar' o --expected-db)"
     from . import verdict
-    verdicts = (verdict.build(results, uuid_of, db_status, ignored_pdfs, bool(a.no_pdf and pdfs))
+    verdicts = (verdict.build(results, uuid_of, db_status, ignored_pdfs, bool(a.no_pdf and pdfs), compania_of)
                 if (verificar or a.expected or a.expected_db) else None)
     if a.format == "json":
         print(report.to_json(results, verdicts, spec))

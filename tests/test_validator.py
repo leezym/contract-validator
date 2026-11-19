@@ -113,13 +113,24 @@ def test_build_covers_every_type_and_format(real):
 
 @needs_source
 def test_ndb_changes_follow_xml_sheet(real):
-    """NDB: ivaPerci1 sin renombrar (hoja XML), tipoEstablecimiento eliminado (hoja del tipo), distrito nuevo."""
+    """NDB: Renombrar ivaPerci1 -> ivaPerci (hoja XML, O162), tipoEstablecimiento eliminado (hoja del tipo), distrito nuevo."""
     _, _, spec = real
     doc = load_document(os.path.join(SPECS, "pbs-notas-debito.json"))
     assert doc.doc_type == "NDB"
     sel = {(s.change, s.path) for s in spec if s.doc_type == "NDB" and s.fmt == "JSON"}
-    assert sel >= {("SIN_CAMBIO", "resumen.ivaPerci1"), ("ELIMINADO", "emisor.tipoEstablecimiento"),
+    assert sel >= {("RENOMBRADO", "resumen.ivaPerci"), ("ELIMINADO", "emisor.tipoEstablecimiento"),
                    ("NUEVO", "emisor.direccion.distrito"), ("NUEVO", "resumen.totalPagar")}
+
+
+@needs_source
+def test_renames_of_xml_sheet_apply_to_every_marked_type(real):
+    """Hoja 'XML' filas 162-163: 'Renombrar ivaPerci1 -> ivaPerci' / 'ivaRete1 -> ivaRete' en cada columna marcada."""
+    _, _, spec = real
+    ren = {(s.doc_type, s.path, s.old_path) for s in spec if s.fmt == "JSON" and s.change == "RENOMBRADO"}
+    for t in ("CCF", "NCR", "NDB"):
+        assert (t, "resumen.ivaPerci", "resumen.ivaPerci1") in ren
+    for t in ("CCF", "FAC", "NCR", "NDB"):
+        assert (t, "resumen.ivaRete", "resumen.ivaRete1") in ren
 
 
 @needs_source
@@ -418,3 +429,12 @@ def test_cross_check_count_ignores_null_repetitions(tmp_path):
     assert run(["20", "30"]) == []
     assert run(["20", "99"]) == ["XREF_MISMATCH"]
     assert run(["20"]) == ["XREF_COUNT_MISMATCH"]
+
+
+@needs_source
+def test_json_sheet_may_list_the_new_name_of_a_rename():
+    """La hoja 'JSON' lista resumen/ivaPerci y resumen/ivaRete (nombre correcto según el usuario) aunque la hoja 'XML'
+    diga 'Renombrar ivaPerci1 -> ivaPerci': no es una diferencia del libro."""
+    from contract_validator.build_contract import build_rows
+    _, lint = build_rows(SOURCE)
+    assert not [m for *_, m in lint if "Hoja JSON" in m and ("ivaPerci" in m or "ivaRete" in m)]

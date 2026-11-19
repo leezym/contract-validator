@@ -7,8 +7,9 @@
     "numeros_detalle": "se ignora el separador de miles (1,603.69 = 1603.69) y los ceros decimales finales (285.6000 = 285.60; 35.00 = 35). Los enteros con ceros a la izquierda (001918) NO se alteran",
     "identificadores": true,
     "identificadores_detalle": "se ignoran guiones y espacios en numeros como NIT/NRC/telefono (0501-091219-101-3 = 05010912191013; 2248-5100 = 22485100)",
-    "texto_ignorar_acentos": false,
-    "texto_ignorar_mayusculas": false
+    "texto_ignorar_acentos": true,
+    "texto_ignorar_mayusculas": false,
+    "texto_ignorar_acentos_detalle": "Textos con la misma información y distinto uso de tildes son iguales (PDF='Marítima de Acajutla' = XML/BD='Maritima de Acajutla'). Indicación del usuario 2026-11-19."
   },
   "catalogos": {
     "fuente": "Excel, columna Observaciones: tipoModelo 'CAT-003 (1 previo / 2 diferido-contingencia)'; tipoOperacion 'CAT-004 normal/contingencia'",
@@ -93,5 +94,9 @@
     "apendices": [
       "apendice01"
     ]
+  },
+  "etiquetas_pdf": {
+    "descripcion": "Etiqueta con la que el PDF imprime un tag XML cuando no coincide con la Descripcion del libro. Si la etiqueta se repite (p. ej. correo del emisor y del receptor) basta con que una de sus ocurrencias muestre el valor. Indicación del usuario 2026-11-19: el correo del receptor se imprime como 'Correo electrónico' en todos los tipos de factura.",
+    "DatosEntrada.InformacioGeneral.InformacionAdquiriente.ContactosReceptor.email": "Correo electrónico"
   }
 }

@@ -478,7 +478,12 @@ def _check_json_sheet(wb, rows: list[dict], lint: list):
         v3 = {}
         for x in rows:
             if x["tipo_doc"] == code and x["formato"] == "JSON" and x["cambio"] != NEW:
-                v3.setdefault(x["ruta_anterior"] or x["ruta"], x["fila_origen"])
+                old = x["ruta_anterior"]
+                # RENOMBRADO: la hoja 'JSON' puede listar el nombre anterior o el nuevo (indicación del usuario
+                # 2026-11-19: el nombre de la hoja JSON es el correcto, p. ej. resumen/ivaPerci). Ambos son válidos.
+                if old and old not in sheet and x["ruta"] in sheet:
+                    old = x["ruta"]
+                v3.setdefault(old or x["ruta"], x["fila_origen"])
         for p in sorted(set(sheet) - set(v3)):
             lint.append((JSON_SHEET, sheet[p], "WARNING",
                          f"Hoja JSON [{code}]: '{p}' no aparece en la columna del tipo en la hoja 'XML'"))

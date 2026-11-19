@@ -64,6 +64,7 @@ $env:PYTHONPATH="src"
 | `data/specs/pdf_presentacion.json` | Normalizaciones aceptadas PDF ↔ XML (fechas, miles, guiones) y tags que el PDF no imprime | Sí, con aprobación |
 | `data/specs/mapeo_bd.xlsx` | Qué columna/tabla de la BD alimenta cada campo del contrato, por tipo de documento | Sí, con aprobación |
 | `data/specs/normalizaciones_bd.json` | Normalizaciones aceptadas BD ↔ documentos (hoy: tolerancia de 0.01 en montos y de 120 s en la hora de emisión) | Sí, con aprobación |
+| `data/specs/companias.json` | Compañías (CIA), su esquema Oracle y cómo reconocerlas (NIT del emisor, `codigoEmpresa`). Hoy: 53 El Salvador → `VENTASSAL`, 41 Teramed → `VENTASSVC` | Sí, al agregar una compañía |
 | `queries/valores_esperados.sql` | Query Oracle (solo `SELECT`) que la automatización ejecuta para traer los valores esperados por documento | Solo si cambia el mapeo |
 | `config/oracle.local.json` | Servidor Oracle (host, puerto, SID/servicio), **sin credenciales**. No se versiona | Sí, una vez por equipo |
 | `.env` | Usuario y contraseña de Oracle (`CV_ORACLE_USER`, `CV_ORACLE_PASSWORD`). No se versiona (plantilla `.env.example`) | Sí, una vez por equipo |
@@ -202,7 +203,7 @@ python -c "from contract_validator.db_fetch import load_db_config as L; c=L(); p
 Comprobar la conexión con un documento conocido:
 
 ```powershell
-python -m contract_validator fetch-expected --codigo-generacion 13062C60-FF5A-BECC-E063-9B78A8C07752 --out reports/prueba_conexion.tsv
+python -m contract_validator fetch-expected --cia 53 --codigo-generacion 13062C60-FF5A-BECC-E063-9B78A8C07752 --out reports/prueba_conexion.tsv
 # 1 documento(s), 86 valor(es) esperado(s) -> reports/prueba_conexion.tsv
 ```
 
@@ -222,10 +223,15 @@ Internamente:
 
 1. **Estructura:** cada JSON y XML contra el contrato `.xlsx` (campos nuevos, eliminados, renombrados, requeridos, nulos, catálogos).
 2. **Coherencia entre archivos:** XML ↔ JSON del mismo documento. El PDF oficial (MINH) se valida aparte, contra el XML y contra la BD.
-3. **Consulta a la BD:** toma el Código de Generación de cada archivo y ejecuta `queries/valores_esperados.sql` en
-   Oracle (solo lectura) para exactamente esos documentos.
-4. **Información vs BD:** compara JSON, XML y PDF contra los valores consultados (`mapeo_bd.xlsx`, `normalizaciones_bd.json`).
-5. **Veredicto por documento** en consola y en la hoja **Veredicto** (primera hoja) del Excel
+3. **Compañía del documento:** antes de consultar se identifica la CIA de cada documento con lo que traen sus archivos:
+   NIT del emisor (JSON `emisor.nit` / XML `nitCompania`), `codigoEmpresa` del JSON y el prefijo del nombre del XML
+   (`41_24_01_…`) o del PDF (`…_MINH_41…`). Con `data/specs/companias.json` se elige el esquema (53 → `VENTASSAL`,
+   41 → `VENTASSVC`). Si las señales no coinciden o la CIA no está configurada, ese documento no se consulta y su
+   información queda **NO VERIFICADA** con el motivo. La consola y el veredicto muestran la compañía consultada.
+4. **Consulta a la BD:** ejecuta `queries/valores_esperados.sql` en Oracle (solo lectura) para exactamente esos
+   documentos, en el esquema de su compañía y filtrando por su CIA.
+5. **Información vs BD:** compara JSON, XML y PDF contra los valores consultados (`mapeo_bd.xlsx`, `normalizaciones_bd.json`).
+6. **Veredicto por documento** en consola y en la hoja **Veredicto** (primera hoja) del Excel
    `reports/verificacion_<fecha_hora>.xlsx` (o el que se indique con `--out`).
 
 | Línea del veredicto | Responde | Valores |
@@ -375,6 +381,8 @@ La salida `--format json` incluye el mismo texto en `explicacion` de cada hallaz
 | `XREF_FORMAT_DIFF` | WARNING | Mismo valor con distinto formato | Decide el equipo |
 | `PDF_MISMATCH`, `PDF_IDENTITY` | ERROR | El PDF oficial no coincide con el XML | Revisar la impresión |
 | `PDF_NOT_PRINTED` | WARNING | Valor del XML que no aparece en el PDF | Si no se imprime por diseño, agregarlo a `no_impreso` |
+| `PDF_TRUNCATED` | WARNING | El PDF imprime cortado un valor con etiqueta propia (correo `CEAYALA@TECNOQUIMICAS.C` de `…COM`) | Revisar el ancho del campo en el PDF |
+| `PDF_FORMAT_DIFF` | WARNING | En la fila de un ítem el PDF muestra el mismo número con menos decimales (cantidad `342145.23` impresa `342,145`), contra el XML o la BD | Decide el equipo; no es un error |
 | `DB_MISMATCH_JSON` / `_XML` / `_PDF` | ERROR | El documento difiere de la BD, le falta un valor que la BD tiene, o tiene otra cantidad de ítems | Revisar el generador o los datos |
 | `DB_MISSING` | ERROR | El Código de Generación del archivo no existe en la BD consultada (o en el archivo de valores) | Confirmar el ambiente (pruebas/producción) y que el documento esté registrado |
 | `DB_MISSING` | WARNING | Campos del documento sin fuente en BD (no verificables) | Informativo; se lista una vez por documento |
@@ -396,6 +404,16 @@ La salida `--format json` incluye el mismo texto en `explicacion` de cada hallaz
   una diferencia da un hallazgo sobre `apendice[apendiceNN]`. Si está en la BD y no llega en el JSON da
   `DB_MISMATCH_JSON` (y `XREF_MISSING` si está en el XML), aunque `resumen.observaciones` tenga los mismos datos; si no
   llega en el XML da el aviso `APENDICE_NOT_RECEIVED`.
+- **Etiquetas propias del PDF:** cuando el PDF imprime un tag con una etiqueta distinta a la `Descripcion` del libro, se
+  declara en `etiquetas_pdf` de `pdf_presentacion.json`. Hoy: correo del receptor
+  (`ContactosReceptor.email` / `receptor.correo`) = `Correo electrónico`, en todos los tipos. Como el emisor usa la misma
+  etiqueta, basta con que una de las ocurrencias muestre el valor. Mayúsculas distintas = `PDF_FORMAT_DIFF` y valor
+  cortado = `PDF_TRUNCATED` (avisos); otro valor = error.
+- **Filas de ítems en el PDF:** la fila de cada ítem va desde la línea que empieza con su código hasta antes del siguiente
+  código o de `Total letras`/`Sumas`; así se leen bien las descripciones de varias líneas con los importes al final. Un
+  número igual con menos decimales (`342145.23` → `342,145`; `0.071860` → `0.07186`) es `PDF_FORMAT_DIFF` (aviso).
+- **Tildes en el PDF:** al comparar el PDF con el XML o la BD se ignoran las tildes (`Marítima de Acajutla` = `Maritima de Acajutla`);
+  mayúsculas y demás diferencias siguen contando (`texto_ignorar_acentos` en `pdf_presentacion.json`).
 - **Régimen de exportación en el PDF:** el código es `tipoRegimen` (abreviado, p. ej. `EX-1`) + `.` + `regimen`. Con ese código se
   busca en `pdf_presentacion.json` el texto impreso, que puede ocupar más de una línea del PDF (catálogo `REGIMEN` de `FE_PARAMETROS`).
 - **Apéndice en el PDF:** los datos de `apendice01` (`Regional`, `Bodega`, `Concepto`, `Pedido`, `Plazo`) deben verse en el PDF con su
@@ -447,6 +465,7 @@ Para `resumen.totalLetras` la consulta llama a la misma función del generador
 | El libro Excel | `build` → `audit-plano` (0 errores) → revisar la hoja `lint` → `pytest -q` |
 | El usuario indica una excepción a lo que dice el libro | Agregar el ajuste en `data/specs/ajustes_contrato.json` → `build` → `audit-plano` (0 errores, ajuste como `AJUSTE_APLICADO`) |
 | Una regla de la BD (columna, fórmula, catálogo) | Editar `mapeo_bd.xlsx` (categoría, fuente, transformación, **aprobado**) y ajustar `queries/valores_esperados.sql` en la misma ruta; volver a ejecutar el query y la validación sobre documentos conocidos |
+| Se agrega una compañía (otra CIA) | Agregar en `data/specs/companias.json` su código CIA, nombre, esquema (`VENTAS<xxx>`) y NIT del emisor (y `codigoEmpresa` si el JSON lo trae). El query no cambia: usa `{ESQUEMA_VENTAS}` y `:cia`. `VENTASTQ.FE_PARAMETROS` se filtra por `CODIGO_TQ = CIA` |
 | Una normalización aceptada | Editar `normalizaciones_bd.json` (BD) o `pdf_presentacion.json` (PDF). Solo con aprobación: el validador no acepta equivalencias que no estén escritas ahí |
 | Un campo pasa a tener fuente | Cambiar su fila de `SIN_FUENTE` a `DIRECTA`/`TRANSFORMACION`/`CATALOGO` con `aprobado = SI` y agregarlo al query |
 
@@ -535,8 +554,9 @@ Cuando no se quiere consultar en línea durante la verificación (por ejemplo, p
 
 ```powershell
 # Extraer por documentos o por rango de fecha de autorización (tope de documentos)
-python -m contract_validator fetch-expected --codigo-generacion <UUID> [<UUID> ...] --out reports/esperados.tsv
-python -m contract_validator fetch-expected --desde 2026-11-01 --hasta 2026-11-15 --max-docs 200 --out reports/esperados.tsv
+# --cia es obligatorio con --codigo-generacion (los UUID deben ser de esa compañía); por rango, default: todas las de companias.json
+python -m contract_validator fetch-expected --cia 53 --codigo-generacion <UUID> [<UUID> ...] --out reports/esperados.tsv
+python -m contract_validator fetch-expected --desde 2026-11-01 --hasta 2026-11-15 --cia 41 --max-docs 200 --out reports/esperados.tsv
 
 # Verificar usando ese archivo en lugar de consultar la BD
 python -m contract_validator verificar entrada/ --expected reports/esperados.tsv
@@ -558,6 +578,6 @@ CODIGO_GENERACION                       TIPO_DOC  RUTA                          
 
 **Cómo arma el query cada valor (detalle en `mapeo_bd.xlsx`):** clave `DOC.PREIMPRESO` = Código de Generación; tipo por
 `DOC.TIPO_DCTO_EMITIR` + `DOC.CPTO` (cpto 055 = REM); encabezado de `DOC`, `DOC_EXTENDIDO`, `CLIENTES`, `CIA`, `DOC_EXP`,
-`VENTASTQ.FE_PARAMETROS` y `PAIS`; ítems de `DET_VENTAS` (`CANTDESP <> 0`, orden por `ARTICULO`) con descripción de `ART`
+`VENTASTQ.FE_PARAMETROS` y `PAIS`; ítems de `DET_VENTAS` (`CANTDESP <> 0`, en el orden del generador: exportación por `ORDEN_FACTURAS`; demás por `PADRE`, `ORDEN_FACTURAS`) con descripción de `ART`
 / `ART_PAISES` + lotes de `LOTES_ART`; arreglos con sufijo `[n]` y apéndice por nombre (`apendice.valor[apendice02]`).
 `VENTASTQ.FE_PARAMETROS` guarda credenciales: el query la filtra por nombre de parámetro y nunca las lee.

@@ -157,7 +157,8 @@ def test_presentation_list_is_explicit(cfg):
     assert cfg.canon("13/11/2026") == cfg.canon("2026-11-13") == cfg.canon("2026/11/13")
     assert cfg.canon("0501-091219-101-3") == "05010912191013" and cfg.canon("2248-5100") == "22485100"
     assert cfg.canon("001918") != cfg.canon("1918")                 # ceros a la izquierda NO se alteran
-    assert cfg.canon("DÓLAR") != cfg.canon("DOLAR") and cfg.canon("Ab") != cfg.canon("AB")  # texto: exacto
+    assert cfg.canon("DÓLAR") == cfg.canon("DOLAR")                 # tildes: misma información (2026-11-19)
+    assert cfg.canon("Ab") != cfg.canon("AB") and cfg.canon("Marítima") != cfg.canon("Maritimo")  # el resto: exacto
     strict = Presentation()
     assert strict.canon("1,603.69") != strict.canon("1603.69") and strict.canon("13/11/2026") != strict.canon("2026-11-13")
 
@@ -249,3 +250,56 @@ def test_real_ccf_pair_detects_changes(spec, cfg, tmp_path):
 def test_return_event_type_is_detected_from_the_soap_operation():
     doc = load_document(RET_XML[0])
     assert doc.fmt == "XML" and doc.doc_type == "RETORNO"   # no trae tipoFactura: lo identifica <EventoRetornoEntrada>
+
+
+# ---- filas de ítems con descripción larga y diferencias solo de formato (datos sintéticos)
+ITEM_LINES = [
+    "CUERPO DEL DOCUMENTO(DETALLES)", "CÓDIGO DESCRIPCIÓN", "CANTIDAD", "PRECIO",
+    "9990001 PRODUCTO DE PRUEBA | DESCRIPCION LARGA LINEA 1 | CANTIDAD ADJUDICADA: 1,000 TAB",
+    "SEGUNDA LINEA DE LA DESCRIPCION | LOTE: X1",
+    "Unidad 1,234 0.07186 0.00 0.00 88.68 0",
+    "Total letras: OCHENTA Y OCHO CON 68/100",
+]
+
+
+def test_item_block_spans_lines_until_the_amounts():
+    from contract_validator.pdf_check import amounts_line, item_blocks, item_row_count
+    blocks = item_blocks(ITEM_LINES, ["9990001"])
+    assert len(blocks["9990001"]) == 3 and amounts_line(blocks["9990001"]).startswith("Unidad")
+    assert item_row_count(ITEM_LINES) == 1
+
+
+def test_same_value_with_fewer_decimals_is_only_a_format_difference():
+    from contract_validator.pdf_check import format_match, item_blocks, same_value_other_format
+    assert same_value_other_format("1234.23", "1,234")          # redondeado a enteros
+    assert same_value_other_format("0.071860", "0.07186")
+    assert not same_value_other_format("1234.23", "1,235")      # otro valor
+    assert not same_value_other_format("50", "5")
+    block = item_blocks(ITEM_LINES, ["9990001"])["9990001"]
+    assert format_match("1234.23", block) == "1,234"
+    assert format_match("999", block) is None
+
+
+def test_explain_format_difference_is_a_warning():
+    from contract_validator.explain import explain
+    from contract_validator.models import Finding, Result
+    r = Result("x.pdf", doc_type="FAC", fmt="PDF(MINH)")
+    f = Finding("WARNING", "PDF_FORMAT_DIFF", "DatosEntrada.Items.cantidadArticulo",
+                "Ítem 1 (9990001): cantidad XML=1234.23 PDF=1,234 (mismo valor con otro formato)")
+    assert "mismo valor con otro formato" in explain(f, r) and "aviso" in explain(f, r)
+
+
+def test_receptor_email_is_read_from_its_pdf_label():
+    """El correo del receptor se imprime como 'Correo electrónico' (también está el del emisor con la misma etiqueta)."""
+    from contract_validator.pdf_check import compare_labeled, label_values
+    pres = load_presentation()
+    tag = "DatosEntrada.InformacioGeneral.InformacionAdquiriente.ContactosReceptor.email"
+    assert pres.labels[tag] == "Correo electrónico"
+    lines = ["Correo electrónico: emisor@prueba.test", "GIRO DE PRUEBA Correo electronico: CLIENTE@PRUEBA.TEST"]
+    shown = label_values(lines, "Correo electrónico")
+    assert shown == ["emisor@prueba.test", "CLIENTE@PRUEBA.TEST"]
+    assert compare_labeled(pres, "CLIENTE@PRUEBA.TEST", shown) is None
+    assert compare_labeled(pres, "cliente@prueba.test", shown)[:2] == ("WARNING", "PDF_FORMAT_DIFF")
+    assert compare_labeled(pres, "CLIENTE@PRUEBA.TEST.SV", shown)[:2] == ("WARNING", "PDF_TRUNCATED")
+    assert compare_labeled(pres, "otro@prueba.test", shown)[:2] == ("ERROR", "PDF_MISMATCH")
+    assert compare_labeled(pres, "otro@prueba.test", [])[:2] == ("ERROR", "PDF_VALUE_MISSING")

@@ -12,13 +12,14 @@ Estrategia en 3 capas, sin inventar un mapeo (ver README):
 La igualdad es exacta salvo las normalizaciones de `data/specs/pdf_presentacion.json` (lista explícita y editable).
 
 Códigos: PDF_EMPTY, PDF_TOOL_MISSING, PDF_NO_PAIR, PDF_IDENTITY, PDF_DOCTYPE, PDF_MISMATCH, PDF_VALUE_MISSING,
-PDF_COUNT_MISMATCH (ERROR); PDF_NOT_PRINTED, PDF_VALUE_NOT_IN_XML, PDF_NO_PAIR auto, PDF_IGNORED (WARNING).
+PDF_COUNT_MISMATCH (ERROR); PDF_FORMAT_DIFF (WARNING: mismo valor con otro formato), PDF_TRUNCATED (WARNING: valor cortado); PDF_NOT_PRINTED, PDF_VALUE_NOT_IN_XML, PDF_NO_PAIR auto, PDF_IGNORED (WARNING).
 Solo se valida el PDF MINH (oficial de Hacienda); el PDF interno de TQ se ignora.
 """
 from __future__ import annotations
 import json
 import os
 import re
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal, InvalidOperation
 from .crosscheck import apendice_records, document_id, xml_values
 from .models import Finding, Result
 from .pdf_text import PdfInfo, deaccent, read_pdf
@@ -46,6 +47,7 @@ class Presentation:
         self.acentos = bool(n.get("texto_ignorar_acentos", False))
         self.mayus = bool(n.get("texto_ignorar_mayusculas", False))
         self.catalogs = {k: v for k, v in data.get("catalogos", {}).items() if isinstance(v, dict)}
+        self.labels = {k: v for k, v in data.get("etiquetas_pdf", {}).items() if k != "descripcion"}
         self.composite = {k: v for k, v in data.get("catalogos_compuestos", {}).items() if k != "descripcion"}
         self.printed_apendices = set(data.get("apendices_impresos", {}).get("apendices", []))
         ni = data.get("no_impreso", {})
@@ -146,6 +148,108 @@ def _tok(t: str) -> str:
     return t.strip("$:;()").rstrip(",")
 
 
+# ------------------------------------------------------------------ etiquetas del PDF configuradas
+_ACCENTS = {"a": "aá", "e": "eé", "i": "ií", "o": "oó", "u": "uúü", "n": "nñ"}
+
+
+def label_values(lines: list, label: str) -> list[str]:
+    """Valores impresos tras 'etiqueta:' en todas sus ocurrencias (sin distinguir tildes ni mayúsculas)."""
+    rx = "".join(f"[{_ACCENTS[ch.lower()]}]" if ch.lower() in _ACCENTS else re.escape(ch)
+                 for ch in _strip_accents(label))
+    pat = re.compile(r"(?<![\w])" + rx + r"\s*:\s*(\S+)", re.I)
+    return [m.group(1) for ln in lines for m in pat.finditer(ln)]
+
+
+def _strip_accents(t: str) -> str:
+    import unicodedata
+    return "".join(ch for ch in unicodedata.normalize("NFKD", t) if not unicodedata.combining(ch))
+
+
+def compare_labeled(cfg, expected, shown: list[str]):
+    """-> (severidad, código, valor del PDF) o None si coincide.
+    Mayúsculas distintas = PDF_FORMAT_DIFF (aviso); valor cortado = PDF_TRUNCATED (aviso); otro valor = error."""
+    if not shown:
+        return "ERROR", "PDF_VALUE_MISSING", ""
+    e = str(expected).strip()
+    if any(cfg.canon(v) == cfg.canon(e) for v in shown):
+        return None
+    if any(v.lower() == e.lower() for v in shown):
+        return "WARNING", "PDF_FORMAT_DIFF", next(v for v in shown if v.lower() == e.lower())
+    cut = [v for v in shown if len(v) >= 3 and e.lower().startswith(v.lower())]
+    if cut:
+        return "WARNING", "PDF_TRUNCATED", max(cut, key=len)
+    best = max(shown, key=lambda v: len(os.path.commonprefix([v.lower(), e.lower()])))
+    return "ERROR", "PDF_MISMATCH", best
+
+
+# ------------------------------------------------------------------ filas de ítems
+ITEM_SECTION = re.compile(r"CUERPO DEL DOCUMENTO", re.I)
+ITEM_END = re.compile(r"^(total letras|sumas\b|suma de operaciones|\*{3,})", re.I)
+ITEM_ROW = re.compile(r"^\d{5,}\s+\D")
+MAX_ITEM_LINES = 40
+
+
+def item_blocks(lines: list, codes) -> dict:
+    """{código: líneas de su fila}. La fila va desde la línea que empieza con el código hasta antes del siguiente
+    código o del cierre del detalle ('Total letras', 'Sumas', ...): la descripción puede ocupar varias líneas y los
+    importes quedar en la última."""
+    codes = set(codes)
+    starts = {}
+    for i, ln in enumerate(lines):
+        first = ln.split(" ", 1)[0] if ln.strip() else ""
+        if first in codes and first not in starts:
+            starts[first] = i
+    bounds = sorted(starts.values())
+    out = {}
+    for code, i0 in starts.items():
+        limit = next((b for b in bounds if b > i0), min(len(lines), i0 + MAX_ITEM_LINES))
+        i1 = i0 + 1
+        while i1 < limit and not ITEM_END.match(lines[i1].strip()):
+            i1 += 1
+        out[code] = lines[i0:i1]
+    return out
+
+
+def item_row_count(lines: list) -> int:
+    """Filas de ítems del PDF: líneas del detalle que empiezan con un código numérico seguido de texto."""
+    i0 = next((i for i, ln in enumerate(lines) if ITEM_SECTION.search(ln)), None)
+    sec = lines if i0 is None else lines[i0 + 1:]
+    end = next((i for i, ln in enumerate(sec) if ITEM_END.match(ln.strip())), len(sec))
+    return sum(1 for ln in sec[:end] if ITEM_ROW.match(ln))
+
+
+def _dec(t):
+    t = str(t).replace(",", "").strip()
+    if not re.fullmatch(r"[+-]?(\d+\.?\d*|\.\d+)", t):
+        return None
+    try:
+        return Decimal(t)
+    except InvalidOperation:
+        return None
+
+
+def same_value_other_format(expected, token: str) -> bool:
+    """El PDF muestra el mismo número con menos decimales (redondeado o truncado): 342145.23 -> '342,145'."""
+    tok = _tok(token)
+    e, t = _dec(expected), _dec(tok)
+    if e is None or t is None:
+        return False
+    places = len(tok.split(".")[1]) if "." in tok else 0
+    q = Decimal(1).scaleb(-places)
+    return t in (e.quantize(q, rounding=ROUND_HALF_UP), e.quantize(q, rounding=ROUND_DOWN))
+
+
+def amounts_line(block: list) -> str:
+    """Línea de importes de la fila: la última con 3 o más números."""
+    nums = [ln for ln in block if sum(1 for t in ln.split() if _dec(_tok(t)) is not None) >= 3]
+    return nums[-1] if nums else (block[0] if block else "")
+
+
+def format_match(expected, block: list):
+    """Número de la línea de importes que es el mismo valor con otro formato, o None."""
+    return next((t for t in amounts_line(block).split() if same_value_other_format(expected, t)), None)
+
+
 class _Ctx:
     def __init__(self, info: PdfInfo, cfg: Presentation):
         self.cfg = cfg
@@ -237,6 +341,25 @@ def check_pdf(info: PdfInfo, xml_file: str, xml_doc, spec, cfg: Presentation, do
             if cfg.canon(pdf_val) != cfg.canon(exp_txt):
                 add("ERROR", "PDF_MISMATCH", s.path, f"'{m.group(1).strip()}': PDF={pdf_val!r} XML={exp_txt!r}")
 
+    # ---- capa 2a': etiquetas del PDF configuradas (etiquetas_pdf de pdf_presentacion.json)
+    for tag, label in cfg.labels.items():
+        vals = [v for v in xv.get(tag, []) if not _null(v)]
+        if not vals:
+            continue
+        shown = label_values(info.lines, label)
+        for v in vals:
+            res.checked += 1
+            out = compare_labeled(cfg, v, shown)
+            if out is None:
+                continue
+            sev, code, got = out
+            if code == "PDF_VALUE_MISSING":
+                add(sev, code, tag, f"Valor {v!r} no aparece en el PDF: falta la etiqueta '{label}:'")
+            elif code == "PDF_MISMATCH":
+                add(sev, code, tag, f"'{label}': PDF={got!r} XML={v!r}")
+            else:
+                add(sev, code, tag, f"'{label}': XML={v} PDF={got} ({'mismo valor con otro formato' if code == 'PDF_FORMAT_DIFF' else 'el PDF lo muestra cortado'})")
+
     # ---- capa 2b: Notas (etiqueta y valor viajan en el propio XML)
     records = apendice_records(xml_doc)
     for name in sorted(cfg.printed_apendices & set(records)):
@@ -280,29 +403,39 @@ def check_pdf(info: PdfInfo, xml_file: str, xml_doc, spec, cfg: Presentation, do
 
     # ---- capa 2c: ítems
     items = root.findall("DatosEntrada/Items")
+    blocks = item_blocks(info.lines, [_text(it, "codigoArticulo") for it in items])
     for it in items:
         code = _text(it, "codigoArticulo")
         if _null(code):
             continue
-        line = next((ln for ln in info.lines if ln.split(" ", 1)[0] == code and len(ln.split()) >= 4), None)
-        if line is None:
+        block = blocks.get(code)
+        if not block:
             if info.kind == "MINH":
                 add("ERROR", "PDF_VALUE_MISSING", "DatosEntrada.Items.codigoArticulo", f"Ítem {_text(it, 'numero')}: el código {code} no aparece como fila del PDF")
             continue
-        row = {cfg.canon(_tok(t)) for t in line.split()}
+        row = {cfg.canon(_tok(t)) for ln in block for t in ln.split()}
         res.checked += 1
         for name, tag in (("cantidad", "cantidadArticulo"), ("precio", "monedaPrecioUnitario"), ("descuento", "CargoDescuentos/valor")):
             v = _text(it, tag)
-            if not _null(v) and cfg.canon(v) not in row:
+            if _null(v) or cfg.canon(v) in row:
+                continue
+            shown = format_match(v, block)
+            if shown:  # mismo valor con otro formato (menos decimales): aviso, no error
+                add("WARNING", "PDF_FORMAT_DIFF", f"DatosEntrada.Items.{tag}",
+                    f"Ítem {_text(it, 'numero')} ({code}): {name} XML={v} PDF={shown} (mismo valor con otro formato)")
+            else:
                 add("ERROR", "PDF_MISMATCH", f"DatosEntrada.Items.{tag}", f"Ítem {_text(it, 'numero')} ({code}): {name} XML={v} no figura en la fila del PDF")
     if info.kind == "MINH" and items:
-        rows = [ln for ln in info.lines if re.match(r"^\d{5,}\s+\S+", ln) and len(ln.split()) >= 5 and re.search(r"\d\.\d{2}", ln)]
-        if len(rows) != len(items):
-            add("ERROR", "PDF_COUNT_MISMATCH", "DatosEntrada.Items", f"El PDF tiene {len(rows)} fila(s) de ítems y el XML {len(items)}")
+        n_rows = item_row_count(info.lines)
+        if n_rows != len(items):
+            add("ERROR", "PDF_COUNT_MISMATCH", "DatosEntrada.Items", f"El PDF tiene {n_rows} fila(s) de ítems y el XML {len(items)}")
 
     # ---- capa 3: contención (adelante)
     shown = 0
-    seen = set()
+    # valores ya informados como mismo valor con otro formato: no se repiten como "no impreso"
+    seen = {(f.path, m.group(1)) for f in res.findings if f.code == "PDF_FORMAT_DIFF"
+            for m in [re.search(r" XML=(\S+) PDF=", f.message)] if m}
+    seen |= {(t, v) for t in cfg.labels for v in xv.get(t, [])}  # ya revisados con su etiqueta
     for path, vals in xv.items():
         if path.startswith("DatosEntrada.Notas") or path == "CabeceraEntrada.uuid" or not cfg.printed(path):
             continue

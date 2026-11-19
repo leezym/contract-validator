@@ -196,6 +196,21 @@ def _explain(f, r, names: dict | None = None) -> str:
         m = re.match(r"Ítem (\S+) \((.+?)\): (\w+) XML=(.+) no figura", msg)
         if m:
             return f"En el PDF, la fila del ítem {m.group(1)} (código {m.group(2)}) no muestra la {m.group(3)} {m.group(4)} que trae el XML."
+    if code in ("PDF_FORMAT_DIFF", "PDF_TRUNCATED"):
+        m = re.match(r"'(.+?)': (XML|BD)=(\S+) PDF=(\S+)", msg)
+        if m:
+            fuente = "el XML" if m.group(2) == "XML" else "la BD"
+            como = ("es el mismo valor con otro formato (mayúsculas/minúsculas)" if code == "PDF_FORMAT_DIFF"
+                    else "el PDF lo imprime cortado")
+            return (f"En el PDF, «{m.group(1)}» muestra {m.group(4)} y {fuente} trae {m.group(3)}: {como}. "
+                    "Es un aviso, no un error.")
+    if code == "PDF_FORMAT_DIFF":
+        m = re.match(r"Ítem (\S+) \((.+?)\): (\w+) (XML|BD)=(\S+) PDF=(\S+)", msg)
+        if m:
+            fuente = "el XML" if m.group(4) == "XML" else "la BD"
+            return (f"En la fila del ítem {m.group(1)} (código {m.group(2)}) el PDF muestra la {m.group(3)} como "
+                    f"{m.group(6)} y {fuente} trae {m.group(5)}: es el mismo valor con otro formato (menos decimales). "
+                    "Es un aviso, no un error.")
     if code == "PDF_VALUE_MISSING":
         return f"Un dato que trae el XML no aparece impreso en el PDF: {msg}."
     if code == "PDF_COUNT_MISMATCH":

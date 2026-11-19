@@ -138,7 +138,8 @@ def test_verificar_end_to_end_with_fake_db(tmp_path, monkeypatch, capsys):
     from contract_validator import cli
     from openpyxl import load_workbook
     doc = tmp_path / "doc.json"
-    doc.write_text(json.dumps({"identificacion": {"tipoDte": "03", "codigoGeneracion": U, "numeroControl": "DTE-03-M001P001-000000000000001"}}), encoding="utf-8")
+    doc.write_text(json.dumps({"identificacion": {"tipoDte": "03", "codigoGeneracion": U, "numeroControl": "DTE-03-M001P001-000000000000001"},
+                               "emisor": {"nit": "00000000000091"}}), encoding="utf-8")
     asked = {}
 
     def fake_fetch(uuids, db_config=None, **kw):
@@ -146,9 +147,10 @@ def test_verificar_end_to_end_with_fake_db(tmp_path, monkeypatch, capsys):
         return [(U, "CCF", "identificacion.tipoDte", "03"), (U, "CCF", "identificacion.numeroControl", "DTE-03-M001P001-000000000000009")]
     monkeypatch.setattr(db_fetch, "fetch", fake_fetch)
     out = tmp_path / "rep.xlsx"
-    code = cli.main(["verificar", str(doc), "--out", str(out)])
+    code = cli.main(["verificar", str(doc), "--out", str(out), "--companias", _cias(tmp_path)])
     text = capsys.readouterr().out
     assert asked["uuids"] == [U]
+    assert "[CIA 91 (Prueba, esquema VENTASAAA)]" in text
     assert "VEREDICTO POR DOCUMENTO" in text and "Información vs base de datos   : INCORRECTA" in text
     assert code == 1
     wb = load_workbook(out)
@@ -164,9 +166,36 @@ def test_verificar_without_db_still_validates_structure(tmp_path, monkeypatch, c
         raise db_fetch.DbFetchError("Falta la contraseña: defina la variable de entorno CV_ORACLE_PASSWORD")
     monkeypatch.setattr(db_fetch, "fetch", no_db)
     doc = tmp_path / "doc.json"
-    doc.write_text(json.dumps({"identificacion": {"tipoDte": "03", "codigoGeneracion": U}}), encoding="utf-8")
-    code = cli.main(["verificar", str(doc), "--out", str(tmp_path / "r.xlsx")])
+    doc.write_text(json.dumps({"identificacion": {"tipoDte": "03", "codigoGeneracion": U}, "emisor": {"nit": "00000000000091"}}),
+                   encoding="utf-8")
+    code = cli.main(["verificar", str(doc), "--out", str(tmp_path / "r.xlsx"), "--companias", _cias(tmp_path)])
     text = capsys.readouterr().out
     assert "NO VERIFICADA" in text and "CV_ORACLE_PASSWORD" in text
     assert "Estructura vs contrato (.xlsx) : NO CUMPLE" in text   # el JSON sintético incompleto no cumple el contrato
     assert code == 1
+
+
+def _cias(tmp_path):
+    p = tmp_path / "companias.json"
+    p.write_text(json.dumps({"companias": {"91": {"nombre": "Prueba", "esquema": "VENTASAAA", "nit": ["00000000000091"]}}}),
+                 encoding="utf-8")
+    return str(p)
+
+
+def test_unknown_company_is_not_queried(tmp_path, monkeypatch, capsys):
+    """Sin CIA identificable el documento no se consulta en ningún esquema y la BD queda NO VERIFICADA con el motivo."""
+    from contract_validator import cli
+    asked = {}
+    monkeypatch.setattr(db_fetch, "fetch", lambda uuids, **kw: asked.setdefault("uuids", uuids) and [])
+    doc = tmp_path / "doc.json"
+    doc.write_text(json.dumps({"identificacion": {"tipoDte": "03", "codigoGeneracion": U}, "emisor": {"nit": "123"}}), encoding="utf-8")
+    code = cli.main(["verificar", str(doc), "--out", str(tmp_path / "r.xlsx"), "--companias", _cias(tmp_path)])
+    text = capsys.readouterr().out
+    assert "uuids" not in asked
+    assert "NO VERIFICADA" in text and "no se pudo identificar la compañía" in text
+    assert code == 1
+
+
+def test_db_status_per_document():
+    [v] = verdict.build(_base(), _ids("a.json", "a.xml"), {U: "sin CIA"})
+    assert (v["informacion_bd"], v["informacion_bd_detalle"]) == ("NO VERIFICADA", "sin CIA")

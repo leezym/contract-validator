@@ -14,6 +14,10 @@ Salvaguardas de solo lectura:
   2. la sesión abre con `SET TRANSACTION READ ONLY` (Oracle rechaza cualquier escritura);
   3. al terminar se hace rollback y se cierra la conexión;
   4. tope de documentos por consulta (`max_docs`).
+
+Compañías: cada documento se consulta en el esquema de su CIA (data/specs/companias.json). El query usa
+`{ESQUEMA_VENTAS}` en lugar del esquema y el bind `:cia`; el esquema sale solo de la configuración y se valida como
+identificador Oracle antes de reemplazarlo.
 """
 from __future__ import annotations
 import csv
@@ -30,6 +34,7 @@ FORBIDDEN = re.compile(r"\b(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE|TRUNCAT
 ENV = {"dsn": "CV_ORACLE_DSN", "host": "CV_ORACLE_HOST", "port": "CV_ORACLE_PORT", "sid": "CV_ORACLE_SID",
        "service": "CV_ORACLE_SERVICE", "user": "CV_ORACLE_USER"}
 PASSWORD_ENV = "CV_ORACLE_PASSWORD"
+SCHEMA_PLACEHOLDER = "{ESQUEMA_VENTAS}"
 
 
 class DbFetchError(RuntimeError):
@@ -56,6 +61,16 @@ def check_read_only(sql: str) -> str:
     if m:
         raise DbFetchError(f"El query contiene una instrucción no permitida: {m.group(0).upper()}")
     return body
+
+
+def render_sql(sql: str, esquema: str | None) -> str:
+    """Pone el esquema de la compañía donde el query dice {ESQUEMA_VENTAS}."""
+    if SCHEMA_PLACEHOLDER not in sql:
+        return sql
+    from .companias import SCHEMA_RX
+    if not esquema or not SCHEMA_RX.match(esquema):
+        raise DbFetchError(f"Esquema de compañía inválido o ausente: {esquema!r}")
+    return sql.replace(SCHEMA_PLACEHOLDER, esquema)
 
 
 def read_sql(path: str | None = None) -> str:
@@ -145,9 +160,13 @@ def connect(cfg: dict):
 
 # ------------------------------------------------------------------ ejecución
 def fetch_expected(conn, sql: str, uuids=None, desde: str | None = None, hasta: str | None = None,
-                   max_docs: int | None = None) -> list[tuple]:
-    """Ejecuta el query (una vez por UUID, o una vez por rango) y devuelve filas (uuid, tipo_doc, ruta, valor)."""
-    sql = check_read_only(sql)
+                   max_docs: int | None = None, cia: str | None = None, esquema: str | None = None) -> list[tuple]:
+    """Ejecuta el query (una vez por UUID, o una vez por rango) y devuelve filas (uuid, tipo_doc, ruta, valor).
+    cia/esquema: compañía de los documentos (el query debe consultarse una vez por compañía)."""
+    sql = render_sql(check_read_only(sql), esquema)
+    uses_cia = re.search(r":cia\b", _strip(sql), re.I) is not None
+    if uses_cia and not cia:
+        raise DbFetchError("El query requiere la compañía (:cia) del documento")
     rows: list[tuple] = []
     cur = conn.cursor()
     try:
@@ -155,8 +174,10 @@ def fetch_expected(conn, sql: str, uuids=None, desde: str | None = None, hasta: 
         runs = [{"codigo_generacion": u.strip().upper(), "max_docs": 1} for u in uuids] if uuids else \
                [{"codigo_generacion": None, "max_docs": max_docs}]
         for b in runs:
-            cur.execute(sql, {"codigo_generacion": b["codigo_generacion"], "desde": desde, "hasta": hasta,
-                              "max_docs": b["max_docs"]})
+            binds = {"codigo_generacion": b["codigo_generacion"], "desde": desde, "hasta": hasta, "max_docs": b["max_docs"]}
+            if uses_cia:
+                binds["cia"] = str(cia)
+            cur.execute(sql, binds)
             head = [d[0].upper() for d in cur.description]
             ix = [head.index(c) for c in COLUMNS]
             for r in cur.fetchall():
@@ -185,11 +206,35 @@ def to_tsv_text(rows) -> str:
     return buf.getvalue()
 
 
-def fetch(uuids=None, desde=None, hasta=None, max_docs=None, sql_path=None, db_config=None, connector=connect) -> list[tuple]:
-    """Atajo: config + conexión + query. `connector` permite inyectar una conexión de prueba."""
+def fetch(uuids=None, desde=None, hasta=None, max_docs=None, sql_path=None, db_config=None, connector=connect,
+          companias=None, cia_of=None, cias=None) -> list[tuple]:
+    """Atajo: config + conexión + query, una vez por compañía. `connector` permite inyectar una conexión de prueba.
+
+    companias: {cia: Compania} (default: data/specs/companias.json).
+    cia_of: {uuid: cia} para consultar cada UUID en el esquema de su compañía (obligatorio con `uuids`).
+    cias: compañías a consultar por rango de fechas (default: todas las configuradas).
+    """
+    from .companias import load_companias
     sql = read_sql(sql_path)
+    companias = companias if companias is not None else load_companias()
+    if uuids:
+        cia_of = {u.strip().upper(): str(c) for u, c in (cia_of or {}).items()}
+        sin = sorted({u.strip().upper() for u in uuids} - set(cia_of))
+        if sin:
+            raise DbFetchError(f"Falta la compañía (CIA) de: {', '.join(sin)}")
+        groups: dict[str, list] = {}
+        for u in uuids:
+            groups.setdefault(cia_of[u.strip().upper()], []).append(u)
+    else:
+        groups = {str(c): None for c in (cias or companias)}
+    unknown = sorted(set(groups) - set(companias))
+    if unknown:
+        raise DbFetchError(f"CIA sin esquema en data/specs/companias.json: {', '.join(unknown)}")
     conn = connector(load_db_config(db_config))
     try:
-        return fetch_expected(conn, sql, uuids, desde, hasta, max_docs)
+        rows = []
+        for cia, us in groups.items():
+            rows += fetch_expected(conn, sql, us, desde, hasta, max_docs, cia=cia, esquema=companias[cia].esquema)
+        return rows
     finally:
         conn.close()

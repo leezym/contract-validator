@@ -298,3 +298,15 @@ def test_pdf_must_print_each_apendice01_value_with_its_label(spec):
         ("DB_MISMATCH_PDF", "apendice[apendice01].Bodega"), ("DB_MISMATCH_PDF", "apendice[apendice01].Pedido")]
     assert "PDF='99'" in next(f.message for f in res.findings if f.path.endswith("Bodega"))
     assert "(no impreso)" in next(f.message for f in res.findings if f.path.endswith("Pedido"))
+
+
+def test_pdf_text_ignores_accents_with_real_config(spec):
+    from contract_validator.pdf_check import load_presentation
+    pres = load_presentation(os.path.join(ROOT, "data", "specs", "pdf_presentacion.json"))
+    assert pres.text("Marítima de Acajutla") == pres.text("Maritima de Acajutla")
+    assert pres.canon("Marítima de Acajutla") == pres.canon("Maritima de Acajutla")
+    path = "DatosEntrada.InformacioGeneral.InformacionEmisor.recintoFiscal"
+    cfg = BdConfig({("FAC_EXP", "emisor.recintoFiscal"): "DIRECTA"})
+    pres.catalogs[path] = {"02": "Maritima de Acajutla"}
+    info = PdfInfo(path="x_MINH.pdf", text="", kind="MINH", uuid=U, control="", title="FAC_EXP", lines=["Recinto fiscal: Marítima de Acajutla"])
+    assert check_pdf_db(info, {"emisor.recintoFiscal": "02"}, spec, cfg, pres, "FAC_EXP").ok

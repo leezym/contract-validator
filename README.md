@@ -161,7 +161,8 @@ Clasifica además `lint` (`LINT_DUPLICATE`, `LINT_NOT_PATH`, `LINT_NO_REQ`...) c
 
 ## Valores esperados desde la BD (Fase B: `queries/`, `expected.py`)
 
-Referencia de contenido = tablas de negocio Oracle (`VENTASSAL`/`VENTASTQ`), no el JSON que guarda el generador.
+Referencia de contenido = tablas de negocio Oracle del esquema de la compañía del documento (`data/specs/companias.json`:
+53 → `VENTASSAL`, 41 → `VENTASSVC`) y `VENTASTQ`, no el JSON que guarda el generador.
 Clave: `DOC.PREIMPRESO` = Código de Generación. Detalle y hallazgos en `docs/fase_b_descubrimiento.md`.
 
 - `data/specs/mapeo_bd.xlsx`: ruta del contrato × tipo → categoría (`DIRECTA`, `TRANSFORMACION`, `CATALOGO`, `SIN_FUENTE`,
@@ -173,7 +174,7 @@ Clave: `DOC.PREIMPRESO` = Código de Generación. Detalle y hallazgos en `docs/f
 - `data/specs/normalizaciones_bd.json`: normalizaciones aprobadas BD ↔ documentos (tolerancia de montos 0.01).
 - `queries/valores_esperados.sql`: un solo `SELECT` (Oracle, solo lectura) parametrizado con `:codigo_generacion`, `:desde`,
   `:hasta`, `:max_docs`. Devuelve `CODIGO_GENERACION | TIPO_DOC | RUTA | VALOR`; arreglos con sufijo `[n]` (1-based; ítems =
-  `DET_VENTAS` con `CANTDESP <> 0` ordenados por `ARTICULO`) y apéndice con `[apendiceNN]`.
+  `DET_VENTAS` con `CANTDESP <> 0` en el orden del generador: FEX por `ORDEN_FACTURAS`; demás por `PADRE`, `ORDEN_FACTURAS`) y apéndice con `[apendiceNN]`.
 - `load_expected(source)` lee el resultado exportado (`.tsv`/`.csv`/`.xlsx`, p. ej. desde DBeaver) o un iterable de filas y
   devuelve `{codigo_generacion: {ruta: valor}}`, solo texto.
 
@@ -193,7 +194,7 @@ prioridad). Salvaguardas:
 
 ```powershell
 python -m contract_validator verificar entrada/                     # todo en uno + veredicto (reports/verificacion_<fecha>.xlsx)
-python -m contract_validator fetch-expected --codigo-generacion <UUID>... --out reports/esperados.tsv   # solo extraer
+python -m contract_validator fetch-expected --cia 53 --codigo-generacion <UUID>... --out reports/esperados.tsv   # solo extraer
 python -m contract_validator fetch-expected --desde 2026-11-01 --hasta 2026-11-15 --max-docs 200
 python -m contract_validator validate entrada/ --expected reports/esperados.tsv   # comparar contra un archivo
 # --expected-db (en validate) consulta en línea; --save-expected guarda lo consultado; --db-config otra conexión

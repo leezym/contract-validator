@@ -77,9 +77,12 @@ def _file_of(r) -> str:
     return r.file.split(" <-> ")[0]
 
 
-def build(results, uuid_of: dict, db_status: str = "", ignored_pdfs: dict | None = None, pdf_skipped: bool = False) -> list[dict]:
+def build(results, uuid_of: dict, db_status: str | dict = "", ignored_pdfs: dict | None = None, pdf_skipped: bool = False,
+          compania_of: dict | None = None) -> list[dict]:
     """uuid_of: {ruta de archivo: Código de Generación}. db_status: '' si se consultó la BD; si no, el motivo.
-    ignored_pdfs: {ruta: Código de Generación o ''} de PDF recibidos que no son MINH."""
+    ignored_pdfs: {ruta: Código de Generación o ''} de PDF recibidos que no son MINH.
+    db_status también puede ser {Código de Generación: motivo} (p. ej. compañía no identificada).
+    compania_of: {Código de Generación: 'CIA nn (nombre, esquema X)'} consultada en la BD."""
     norm = lambda p: os.path.normcase(os.path.abspath(p))
     ids = {norm(k): v for k, v in uuid_of.items()}
     groups: dict[str, list] = {}
@@ -107,8 +110,9 @@ def build(results, uuid_of: dict, db_status: str = "", ignored_pdfs: dict | None
         bd = by["bd"]
         bd_err = [f for r in bd for f in r.findings if f.severity == "ERROR"]
         compared = sum(r.checked for r in bd)
-        if db_status:
-            bd_v, bd_d = "NO VERIFICADA", db_status
+        status = db_status.get(u, "") if isinstance(db_status, dict) else db_status  # por documento (p. ej. sin CIA)
+        if status:
+            bd_v, bd_d = "NO VERIFICADA", status
         elif not bd:
             bd_v, bd_d = "NO VERIFICADA", "no hubo comparación contra la BD para este documento"
         elif any(f.code.startswith("DB_MISMATCH") for f in bd_err):
@@ -123,6 +127,9 @@ def build(results, uuid_of: dict, db_status: str = "", ignored_pdfs: dict | None
             avisos = sum(1 for r in bd for f in r.findings if f.severity == "WARNING")
             bd_v = "CORRECTA"
             bd_d = f"{compared} valor(es) coinciden con la BD" + (f"; {avisos} aviso(s) de campos no verificables" if avisos else "")
+
+        if (compania_of or {}).get(u):
+            bd_d = f"{bd_d} [{compania_of[u]}]"
 
         co = by["coherencia"]
         co_v = "NO APLICA" if not co else ("OK" if all(r.ok for r in co) else "CON DIFERENCIAS")

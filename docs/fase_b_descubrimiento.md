@@ -8,7 +8,10 @@ conexión `svmtest` (Oracle, ambiente de pruebas). Sin datos de clientes en este
 Fuente de referencia = **tablas de negocio** (opción B), no el JSON certificado guardado por el generador
 (`VENTASSAL.DOC_XML_ENTIDAD_FACTEL.JSON`). Ese JSON se usa solo como ayuda para construir el mapeo.
 
-## Esquema relevante (El Salvador = esquema `VENTASSAL`; CIA = `53`)
+## Esquema relevante (El Salvador = esquema `VENTASSAL`, CIA `53`; Teramed = `VENTASSVC`, CIA `41`)
+
+Cada compañía tiene su propio esquema con las mismas tablas; el query usa `{ESQUEMA_VENTAS}` y `:cia`, y la relación
+CIA → esquema está en `data/specs/companias.json`. Abajo dice `VENTASSAL`, pero aplica igual al esquema de cada compañía.
 
 Clave natural de documento en todas las tablas: `CIA, SUC, BODEGA, CPTO, FUENTE, DCTO`.
 
@@ -66,7 +69,9 @@ fijos en 0 `descuNoSuj`, `descuExenta`, `descuGravada`, `porcentajeDescuento`, `
 `noGravado`, `psv` (por tipo).
 
 Reglas confirmadas con evidencia:
-- **Ítems:** `DET_VENTAS` con `CANTDESP <> 0`, ordenados por `ARTICULO` ascendente (hasta 99 ítems).
+- **Ítems:** `DET_VENTAS` con `CANTDESP <> 0`, en el orden del generador (`VENTASAPL.IN_VEN_FACTURA_ELECTRONIC3_PKG`):
+  exportación (`XML_ITEMS_FACEXP_SV_P`) por `ORDEN_FACTURAS, ARTICULO`; demás tipos (`XML_ITEMS_SV_P`) por `PADRE, ORDEN_FACTURAS`
+  (hasta 99 ítems). Antes se ordenaba por `ARTICULO` y en Teramed (CIA 41) cruzaba los ítems.
 - **fecEmi:** `DOC_EXTENDIDO.FEC_AUTORIZA` (en REM `DOC.FECFACTURA` es otra fecha).
 - **Dirección del receptor:** `CLIENTES.LOCALIDAD`/`DIRECCION`/`BARRIO` (`DOC.LOCALIDAD`/`DIRECCION` es el lugar de entrega).
 - **NRC:** la BD lo guarda con guion (`289648-0`); el documento lo lleva sin guion.
@@ -112,12 +117,22 @@ Fuente del sufijo encontrada: **`VENTASSAL.LOTES_ART`** (clave del documento + `
 
 ```
 base  = ART.DESCRIPCION || ' ' || ART.PRESENT
-        (FAC_EXP: ART_PAISES.DESCRIPCION || ' ' || ART_PAISES.PRESENT, con ART_PAISES.PAIS = CLIENTES.PAIS)
+        FAC_EXP (como IN_VEN_FACTURA_ELECTRONIC3_PKG.XML_ITEMS_FACEXP_SV_P + OBTENER_DESCRIPCION_ART_F):
+          ART_PAISES con PAIS = DOC.PAIS_DESTINO (si es nulo, SUCURSALES.PAIS); descripción y presentación de
+          ART_PAISES si está vigente a la fecha de autorización (o vencido con REGISTRO_EN_RENOVACION = 'X', salvo
+          artículos PLU del cliente), si no de ART; + ' | Peso neto: <kg> Kilos' si el destino es Nicaragua (29)
 lotes = por cada fila de LOTES_ART, en orden de NRO_LOTE:
         ' | LOTE: ' || UPPER(NRO_LOTE) || ['  F: ' || FEC_FABRICACION] || '   V: ' || FEC_VENCIMIENTO || '  C:' || CANTIDAD
         (fechas YYYY/MM/DD; el tramo F se omite si no hay fecha de fabricación)
-FAC_EXP: || ' | Registro sanitario: ' || ART_PAISES.REGISTRO || ' | Fabricante: ' || ART.NOMBRE_FABRICANTE
+FAC_EXP: || ' | Registro sanitario: ' || ART_PAISES.REGISTRO          (solo si hay registro)
+         || ' | Titular: ' || titular, dirección y país de origen   (solo si hay)
+         || ' | Fabricante: ' || NVL(ART_PAISES.FABRICANTE, ART.NOMBRE_FABRICANTE)
+         || ' | ' || dirección del fabricante || ' | ' || país del fabricante   (solo si hay)
 ```
+
+Medición 2026-11-19 (últimas 60 exportaciones por compañía, contra el JSON certificado): El Salvador 310/349 ítems,
+Teramed 102/147 (antes 263 y 35). Lo que falta es histórico: maestro de artículos editado después de emitir, documentos
+anteriores al peso neto y un prefijo `001; ` en algunas exportaciones a Nicaragua.
 
 Medido en BD contra la descripción de **todos** los ítems certificados (sin contar tildes, por el doble encoding del
 JSON guardado): CCF 15 541/17 160, NCR 23 149/24 343, NDB 133/142, REM 21 051/21 637, FAC_EXP 3 900/5 473; los 15 ítems

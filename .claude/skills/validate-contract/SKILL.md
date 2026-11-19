@@ -129,7 +129,8 @@ archivos reales: `NO_XML_SOURCE`, `MULTI_SOURCE`, `XML_NO_DEST`, `DIFF_ACROSS_TY
 2. Elegir el modo:
    - Documentos en mano (lo normal): `python -m contract_validator verificar <archivos> [--save-expected reports/esperados.tsv]`
      (consulta solo los UUID de esos archivos, uno por uno).
-   - Solo extraer: `python -m contract_validator fetch-expected --codigo-generacion <UUID> [<UUID> ...] --out reports/esperados.tsv`
+   - Solo extraer: `python -m contract_validator fetch-expected --cia <CIA> --codigo-generacion <UUID> [<UUID> ...] --out reports/esperados.tsv`
+     (la CIA define el esquema: `data/specs/companias.json`, 53 → `VENTASSAL`, 41 → `VENTASSVC`; `verificar` la identifica sola)
      o por rango `fetch-expected --desde 2026-11-01 --hasta 2026-11-15 --max-docs 100`; luego `validate ... --expected reports/esperados.tsv`.
 3. Salvaguardas (no desactivarlas): el SQL se rechaza si no es una única consulta SELECT/WITH; la sesión abre con
    `SET TRANSACTION READ ONLY`; al final rollback y cierre; tope de documentos. Para un rango, confirmar con el usuario

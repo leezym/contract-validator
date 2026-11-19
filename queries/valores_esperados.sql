@@ -1,14 +1,18 @@
 -- Valores esperados por documento (Fase B). Oracle. SOLO LECTURA: únicamente SELECT.
--- Generado desde data/specs/mapeo_bd.xlsx (aprobado 2026-11-16; 13 campos antes sin fuente: 2026-11-17). Ver docs/fase_b_descubrimiento.md.
+-- Generado desde data/specs/mapeo_bd.xlsx (donde dice VENTASSAL: esquema de la compañía) (aprobado 2026-11-16; 13 campos antes sin fuente: 2026-11-17). Ver docs/fase_b_descubrimiento.md.
 --
 -- Salida (formato largo, una fila por valor):
 --   CODIGO_GENERACION | TIPO_DOC | RUTA | VALOR
 --   RUTA = ruta JSON del contrato plano ('.' como separador). Arreglos: sufijo [n] 1-based en el orden del documento
---   (ítems: DET_VENTAS con CANTDESP <> 0 ordenados por ARTICULO); apéndice: sufijo [apendiceNN] (nombre del campo).
+--   (ítems: DET_VENTAS con CANTDESP <> 0 en el orden del generador: FEX por ORDEN_FACTURAS; demás por PADRE, ORDEN_FACTURAS); apéndice: sufijo [apendiceNN] (nombre del campo).
 --   Fila ausente = la BD no da valor (null o sin fuente -> DB_MISSING según mapeo_bd).
 --   Números: punto decimal, sin ceros finales ni separador de miles (TO_CHAR FM).
 --
+-- Compañía: {ESQUEMA_VENTAS} es el esquema de la CIA del documento (data/specs/companias.json; p. ej. 53 -> VENTASSAL,
+-- 41 -> VENTASSVC). db_fetch lo reemplaza antes de ejecutar; VENTASTQ, VENTASADM y VENTASAPL son comunes.
+--
 -- Parámetros (bind):
+--   :cia                código de la compañía (VENTAS<xxx>.DOC.CIA)
 --   :codigo_generacion  UUID de un documento (NULL = todos los del rango)
 --   :desde, :hasta      fecha de autorización 'YYYY-MM-DD' (NULL = sin límite)
 --   :max_docs           tope de documentos (NULL = 100)
@@ -26,14 +30,15 @@ WITH prm AS (
                        'TIPO_IDENTIFICACION', 'TIPO_PERSONA', 'TIPO_ITEM', 'IMPUESTO_REGISTRA_FE', 'CODIGO_PLAZO', 'INCOTERMS')
 ),
 k AS (
-  SELECT d.cia, d.suc, d.bodega, d.cpto, d.fuente, d.dcto, d.preimpreso uuid,
+  SELECT d.cia, d.suc, d.bodega, d.cpto, d.fuente, d.dcto, d.preimpreso uuid, e.fec_autoriza fec_aut,
          CASE WHEN d.cpto = '055' THEN 'REM'
               ELSE DECODE(d.tipo_dcto_emitir, 'F', 'FAC', 'CCF', 'CCF', 'NC', 'NCR', 'ND', 'NDB', 'FE', 'FAC_EXP') END tipo_doc
-    FROM ventassal.doc d
-    JOIN ventassal.doc_extendido e ON e.cia = d.cia AND e.suc = d.suc AND e.bodega = d.bodega AND e.cpto = d.cpto AND e.fuente = d.fuente AND e.dcto = d.dcto
+    FROM {ESQUEMA_VENTAS}.doc d
+    JOIN {ESQUEMA_VENTAS}.doc_extendido e ON e.cia = d.cia AND e.suc = d.suc AND e.bodega = d.bodega AND e.cpto = d.cpto AND e.fuente = d.fuente AND e.dcto = d.dcto
    WHERE d.preimpreso IS NOT NULL
      AND d.tipo_dcto_emitir IN ('F', 'CCF', 'NC', 'ND', 'FE')
      AND (:codigo_generacion IS NULL OR d.preimpreso = :codigo_generacion)
+     AND d.cia = :cia
      AND e.fec_autoriza >= NVL(TO_DATE(:desde, 'YYYY-MM-DD'), DATE '2000-01-01')
      AND e.fec_autoriza <  NVL(TO_DATE(:hasta, 'YYYY-MM-DD'), DATE '2999-01-01') + 1
    ORDER BY e.fec_autoriza DESC
@@ -41,26 +46,48 @@ k AS (
 ),
 it AS (
   SELECT k.uuid, k.tipo_doc, d.nrocompcrfiscal,
-         ROW_NUMBER() OVER (PARTITION BY k.uuid ORDER BY v.articulo) n,
+         -- orden de los ítems igual al generador (VENTASAPL.IN_VEN_FACTURA_ELECTRONIC3_PKG):
+         --   exportación (XML_ITEMS_FACEXP_SV_P): ORDEN_FACTURAS, ARTICULO; demás (XML_ITEMS_SV_P): PADRE, ORDEN_FACTURAS
+         ROW_NUMBER() OVER (PARTITION BY k.uuid ORDER BY CASE WHEN k.tipo_doc = 'FAC_EXP' THEN NULL ELSE v.padre END,
+                                                         v.orden_facturas, v.articulo) n,
          v.articulo, v.valor, v.valor_exentas, v.valor_no_sujetas, v.iva_ent,
          CASE WHEN k.tipo_doc = 'FAC' THEN v.cantdesp_ent ELSE v.cantdesp END cant,
          CASE WHEN k.tipo_doc = 'FAC' THEN ROUND(v.precio_ent * (1 + v.porciva / 100), 4) ELSE v.precio END pu,
-         -- descripción: base (ART; exportación: ART_PAISES del país del cliente) + lotes (LOTES_ART, por NRO_LOTE)
-         --              + exportación: registro sanitario (ART_PAISES) y fabricante (ART)
-         CASE WHEN k.tipo_doc = 'FAC_EXP' THEN ap.descripcion || ' ' || ap.present ELSE art.descripcion || ' ' || art.present END
+         -- descripción: base + lotes (LOTES_ART, por NRO_LOTE). Exportación, como el generador
+         -- (IN_VEN_FACTURA_ELECTRONIC3_PKG.XML_ITEMS_FACEXP_SV_P + LN_VEN_FACTURA_ELECTRONIC4_PKG.OBTENER_DESCRIPCION_ART_F):
+         --   descripción/presentación de ART_PAISES (país de destino del documento; si no hay, el de la sucursal) si está vigente a la fecha de autorización
+         --   (o vencido con REGISTRO_EN_RENOVACION = 'X', salvo artículos PLU del cliente); si no, de ART;
+         --   + peso neto (destino Nicaragua) + lotes + 'Registro sanitario', 'Titular', 'Fabricante', dirección y país del
+         --   fabricante, cada uno solo si tiene valor.
+         CASE WHEN k.tipo_doc = 'FAC_EXP' THEN
+                CASE WHEN ap.descripcion IS NOT NULL AND (ap.fecvenc > k.fec_aut OR (ap.fecvenc <= k.fec_aut AND NVL(ap.registro_en_renovacion, 'NULO') = 'X'
+                    AND NOT EXISTS (SELECT 1 FROM {ESQUEMA_VENTAS}.art_plu_clientes p WHERE p.articulo = v.articulo AND p.cliente = d.cliente AND p.fecvenc > k.fec_aut))) THEN ap.descripcion ELSE art.descripcion END
+                || NVL2(CASE WHEN ap.present IS NOT NULL AND (ap.fecvenc > k.fec_aut OR (ap.fecvenc <= k.fec_aut AND NVL(ap.registro_en_renovacion, 'NULO') = 'X'
+                    AND NOT EXISTS (SELECT 1 FROM {ESQUEMA_VENTAS}.art_plu_clientes p WHERE p.articulo = v.articulo AND p.cliente = d.cliente AND p.fecvenc > k.fec_aut))) THEN ap.present ELSE art.present END,
+                        ' ' || CASE WHEN ap.present IS NOT NULL AND (ap.fecvenc > k.fec_aut OR (ap.fecvenc <= k.fec_aut AND NVL(ap.registro_en_renovacion, 'NULO') = 'X'
+                    AND NOT EXISTS (SELECT 1 FROM {ESQUEMA_VENTAS}.art_plu_clientes p WHERE p.articulo = v.articulo AND p.cliente = d.cliente AND p.fecvenc > k.fec_aut))) THEN ap.present ELSE art.present END, NULL)
+                || CASE WHEN d.pais_destino = '29' THEN ' | Peso neto: ' || TRIM(TO_CHAR(v.cantdesp * art.peso_neto, '999999990.000')) || ' Kilos' END
+              ELSE art.descripcion || ' ' || art.present END
          || (SELECT LISTAGG(' | LOTE: ' || UPPER(l.nro_lote)
                             || NVL2(l.fec_fabricacion, '  F: ' || TO_CHAR(l.fec_fabricacion, 'YYYY/MM/DD'), '')
                             || '   V: ' || TO_CHAR(l.fec_vencimiento, 'YYYY/MM/DD') || '  C:' || l.cantidad, '')
                     WITHIN GROUP (ORDER BY l.nro_lote)
-               FROM ventassal.lotes_art l
+               FROM {ESQUEMA_VENTAS}.lotes_art l
               WHERE l.cia = v.cia AND l.suc = v.suc AND l.bodega = v.bodega AND l.cpto = v.cpto AND l.fuente = v.fuente AND l.dcto = v.dcto AND l.articulo = v.articulo)
-         || CASE WHEN k.tipo_doc = 'FAC_EXP' THEN ' | Registro sanitario: ' || ap.registro || ' | Fabricante: ' || art.nombre_fabricante END descr
+         || CASE WHEN k.tipo_doc = 'FAC_EXP' THEN
+                NVL2(ap.registro, ' | Registro sanitario: ' || ap.registro, NULL)
+                || NVL2(TRIM(ap.nombre_titular_reg || ' ' || ap.direccion_titular_reg || ' ' || ap.pais_origen),
+                        ' | Titular: ' || TRIM(ap.nombre_titular_reg || ' ' || ap.direccion_titular_reg || ' ' || ap.pais_origen), NULL)
+                || NVL2(NVL(ap.fabricante, art.nombre_fabricante), ' | Fabricante: ' || NVL(ap.fabricante, art.nombre_fabricante), NULL)
+                || NVL2(ap.direccion_fabricante, ' | ' || ap.direccion_fabricante, NULL)
+                || NVL2(ap.pais_fabricante, ' | ' || ap.pais_fabricante, NULL) END descr
     FROM k
-    JOIN ventassal.doc d ON d.cia = k.cia AND d.suc = k.suc AND d.bodega = k.bodega AND d.cpto = k.cpto AND d.fuente = k.fuente AND d.dcto = k.dcto
-    JOIN ventassal.det_ventas v ON v.cia = k.cia AND v.suc = k.suc AND v.bodega = k.bodega AND v.cpto = k.cpto AND v.fuente = k.fuente AND v.dcto = k.dcto
-    LEFT JOIN ventassal.clientes c ON c.suc = d.suc AND c.cliente = d.cliente
-    LEFT JOIN ventassal.art art ON art.articulo = v.articulo
-    LEFT JOIN ventassal.art_paises ap ON ap.articulo = v.articulo AND ap.pais = c.pais
+    JOIN {ESQUEMA_VENTAS}.doc d ON d.cia = k.cia AND d.suc = k.suc AND d.bodega = k.bodega AND d.cpto = k.cpto AND d.fuente = k.fuente AND d.dcto = k.dcto
+    JOIN {ESQUEMA_VENTAS}.det_ventas v ON v.cia = k.cia AND v.suc = k.suc AND v.bodega = k.bodega AND v.cpto = k.cpto AND v.fuente = k.fuente AND v.dcto = k.dcto
+    LEFT JOIN {ESQUEMA_VENTAS}.clientes c ON c.suc = d.suc AND c.cliente = d.cliente
+    LEFT JOIN {ESQUEMA_VENTAS}.art art ON art.articulo = v.articulo
+    LEFT JOIN {ESQUEMA_VENTAS}.sucursales su ON su.suc = v.suc
+    LEFT JOIN {ESQUEMA_VENTAS}.art_paises ap ON ap.articulo = v.articulo AND ap.pais = NVL(d.pais_destino, su.pais)
    WHERE v.cantdesp <> 0
 ),
 i AS (
@@ -77,11 +104,11 @@ fx AS (
          SUM(CASE WHEN art.tipo_iva = 2 AND NVL(v.linea, 'x') <> '991'
                   THEN ROUND(ROUND(NVL(v.precioneto_moneda_sin_prorr, 0), 2) * v.cantdesp, 2) ELSE 0 END) nosuj
     FROM k
-    JOIN ventassal.doc d ON d.cia = k.cia AND d.suc = k.suc AND d.bodega = k.bodega AND d.cpto = k.cpto AND d.fuente = k.fuente AND d.dcto = k.dcto
-    JOIN ventassal.det_ventas v ON v.cia = k.cia AND v.suc = k.suc AND v.bodega = k.bodega AND v.cpto = k.cpto AND v.fuente = k.fuente AND v.dcto = k.dcto
-    JOIN ventassal.art art ON art.articulo = v.articulo
+    JOIN {ESQUEMA_VENTAS}.doc d ON d.cia = k.cia AND d.suc = k.suc AND d.bodega = k.bodega AND d.cpto = k.cpto AND d.fuente = k.fuente AND d.dcto = k.dcto
+    JOIN {ESQUEMA_VENTAS}.det_ventas v ON v.cia = k.cia AND v.suc = k.suc AND v.bodega = k.bodega AND v.cpto = k.cpto AND v.fuente = k.fuente AND v.dcto = k.dcto
+    JOIN {ESQUEMA_VENTAS}.art art ON art.articulo = v.articulo
    WHERE k.tipo_doc = 'FAC_EXP' AND v.cantdesp > 0
-     AND NOT EXISTS (SELECT 1 FROM ventassal.art_plu_clientes p
+     AND NOT EXISTS (SELECT 1 FROM {ESQUEMA_VENTAS}.art_plu_clientes p
                       WHERE p.articulo = v.articulo AND p.cliente = d.cliente AND p.fecvenc > SYSDATE)
    GROUP BY k.uuid
 ),
@@ -96,7 +123,7 @@ h AS (
          CAST(TO_CHAR(e.fec_autoriza, 'YYYY-MM-DD') AS VARCHAR2(4000)) c07,
          CAST(DECODE(SYS_CONTEXT('USERENV', 'DB_NAME'), 'SVMPROD', '01', '00') AS VARCHAR2(4000)) c08,
          CAST(TO_CHAR(e.fec_autoriza - 1 / 24, 'HH24:MI:SS') AS VARCHAR2(4000)) c09,
-         CAST((SELECT MAX(co.moneda) FROM ventassal.control co WHERE co.tipo = '00' AND co.cia = d.cia) AS VARCHAR2(4000)) c10,
+         CAST((SELECT MAX(co.moneda) FROM {ESQUEMA_VENTAS}.control co WHERE co.tipo = '00' AND co.cia = d.cia) AS VARCHAR2(4000)) c10,
          CAST(CASE WHEN k.tipo_doc IN ('NCR', 'NDB') THEN d.nrocompcrfiscal END AS VARCHAR2(4000)) c11,
          CAST(CASE WHEN k.tipo_doc IN ('NCR', 'NDB') THEN TO_CHAR(d.feccompcrfiscal, 'YYYY-MM-DD') END AS VARCHAR2(4000)) c12,
          CAST(a.nit AS VARCHAR2(4000)) c13,
@@ -130,7 +157,7 @@ h AS (
          CAST(TRIM(c.direccion || ' ' || c.barrio) AS VARCHAR2(4000)) c41,
          CAST(CASE WHEN k.tipo_doc IN ('FAC_EXP') THEN TRIM(d.direccion || ' ' || c.barrio) END AS VARCHAR2(4000)) c42,
          CAST(c.telefono AS VARCHAR2(4000)) c43,
-         CAST((SELECT MIN(ce.e_mail) FROM ventassal.clientes_electronicos ce WHERE ce.cliente = d.cliente) AS VARCHAR2(4000)) c44,
+         CAST((SELECT MIN(ce.e_mail) FROM {ESQUEMA_VENTAS}.clientes_electronicos ce WHERE ce.cliente = d.cliente) AS VARCHAR2(4000)) c44,
          CAST(CASE WHEN k.tipo_doc IN ('FAC_EXP') THEN pa.cod_minhacienda END AS VARCHAR2(4000)) c45,
          CAST(CASE WHEN k.tipo_doc IN ('FAC_EXP') THEN pa.nombre END AS VARCHAR2(4000)) c46,
          CAST(CASE WHEN k.tipo_doc IN ('FAC_EXP') THEN (SELECT MAX(cod) FROM prm WHERE prm.parametro = 'TIPO_PERSONA' AND prm.codigo_tq = c.tipo_persona) END AS VARCHAR2(4000)) c47,
@@ -178,13 +205,13 @@ h AS (
          CAST(d.cliente || '|' || d.orden || '|' || TO_CHAR(d.fecvenc, 'YYYY/MM/DD') || CASE WHEN k.tipo_doc = 'FAC_EXP' THEN '|' || d.moneda_destino END AS VARCHAR2(4000)) c89,
          CAST(d.vendedor || '|' || d.cajas || '|' || CASE WHEN k.tipo_doc = 'FAC_EXP' AND d.pais_destino = '29' THEN NULL ELSE TO_CHAR(d.peso, 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''') END || CASE WHEN k.tipo_doc = 'FAC_EXP' THEN '|' || x.pais_origen_art || '|' || x.puerto_destino END AS VARCHAR2(4000)) c90
     FROM k
-    JOIN ventassal.doc d ON d.cia = k.cia AND d.suc = k.suc AND d.bodega = k.bodega AND d.cpto = k.cpto AND d.fuente = k.fuente AND d.dcto = k.dcto
-    JOIN ventassal.doc_extendido e ON e.cia = k.cia AND e.suc = k.suc AND e.bodega = k.bodega AND e.cpto = k.cpto AND e.fuente = k.fuente AND e.dcto = k.dcto
-    JOIN ventassal.cia a ON a.cia = d.cia
-    LEFT JOIN ventassal.clientes c ON c.suc = d.suc AND c.cliente = d.cliente
-    LEFT JOIN ventassal.doc_exp x ON x.cia = k.cia AND x.suc = k.suc AND x.bodega = k.bodega AND x.cpto = k.cpto AND x.fuente = k.fuente AND x.dcto = k.dcto
-    LEFT JOIN ventassal.pais pa ON pa.pais = c.pais
-    LEFT JOIN ventassal.sri_punto_emision sp ON sp.punto_emision_sri = e.punto_emision_sri
+    JOIN {ESQUEMA_VENTAS}.doc d ON d.cia = k.cia AND d.suc = k.suc AND d.bodega = k.bodega AND d.cpto = k.cpto AND d.fuente = k.fuente AND d.dcto = k.dcto
+    JOIN {ESQUEMA_VENTAS}.doc_extendido e ON e.cia = k.cia AND e.suc = k.suc AND e.bodega = k.bodega AND e.cpto = k.cpto AND e.fuente = k.fuente AND e.dcto = k.dcto
+    JOIN {ESQUEMA_VENTAS}.cia a ON a.cia = d.cia
+    LEFT JOIN {ESQUEMA_VENTAS}.clientes c ON c.suc = d.suc AND c.cliente = d.cliente
+    LEFT JOIN {ESQUEMA_VENTAS}.doc_exp x ON x.cia = k.cia AND x.suc = k.suc AND x.bodega = k.bodega AND x.cpto = k.cpto AND x.fuente = k.fuente AND x.dcto = k.dcto
+    LEFT JOIN {ESQUEMA_VENTAS}.pais pa ON pa.pais = c.pais
+    LEFT JOIN {ESQUEMA_VENTAS}.sri_punto_emision sp ON sp.punto_emision_sri = e.punto_emision_sri
     LEFT JOIN ia ON ia.uuid = k.uuid
     LEFT JOIN fx ON fx.uuid = k.uuid
 ),

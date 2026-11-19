@@ -13,6 +13,10 @@ from contract_validator import db_fetch
 from contract_validator.db_fetch import (DbFetchError, check_read_only, fetch, fetch_expected, load_db_config,
                                          make_dsn, read_sql, write_tsv)
 from contract_validator.expected import load_expected
+from contract_validator.companias import Compania
+
+# compañías sintéticas (no son las reales de data/specs/companias.json)
+CIAS = {"91": Compania("91", "Uno", "VENTASAAA", ["00000000000091"]), "92": Compania("92", "Dos", "VENTASBBB", ["00000000000092"])}
 
 U1 = "AAAAAAAA-0000-4000-8000-000000000001"
 U2 = "AAAAAAAA-0000-4000-8000-000000000002"
@@ -154,7 +158,7 @@ def test_fetch_shortcut_closes_connection(tmp_path):
     conn = FakeConn()
     sql = tmp_path / "q.sql"
     sql.write_text(SQL, encoding="utf-8")
-    rows = fetch([U1], sql_path=str(sql), db_config=None, connector=lambda cfg: conn)
+    rows = fetch([U1], sql_path=str(sql), db_config=None, connector=lambda cfg: conn, companias=CIAS, cia_of={U1: "91"})
     assert len(rows) == 2 and conn.log[-1] == ("CONN_CLOSE", None)
 
 
@@ -162,14 +166,91 @@ def test_cli_expected_db(tmp_path, monkeypatch):
     """validate --expected-db consulta solo los UUID de los archivos de entrada (conexión falsa)."""
     from contract_validator import cli
     doc = tmp_path / "d.json"
-    doc.write_text(json.dumps({"identificacion": {"tipoDte": "03", "codigoGeneracion": U1}}), encoding="utf-8")
+    doc.write_text(json.dumps({"identificacion": {"tipoDte": "03", "codigoGeneracion": U1},
+                               "emisor": {"nit": "00000000000091"}}), encoding="utf-8")
     asked = {}
 
     def fake_fetch(uuids, db_config=None, **kw):
-        asked["uuids"] = uuids
+        asked["uuids"], asked["cia_of"] = uuids, kw.get("cia_of")
         return DATA[U1]
     monkeypatch.setattr(db_fetch, "fetch", fake_fetch)
     out = tmp_path / "esp.tsv"
-    cli.main([str(doc), "--expected-db", "--no-cross", "--save-expected", str(out)])
-    assert asked["uuids"] == [U1]
+    cli.main([str(doc), "--expected-db", "--no-cross", "--save-expected", str(out), "--companias", _cias_file(tmp_path)])
+    assert asked["uuids"] == [U1] and asked["cia_of"] == {U1: "91"}
     assert load_expected(str(out))[U1]["identificacion.tipoDte"] == "03"
+
+
+def _cias_file(tmp_path):
+    p = tmp_path / "companias.json"
+    p.write_text(json.dumps({"companias": {c.cia: {"nombre": c.nombre, "esquema": c.esquema, "nit": c.nit}
+                                           for c in CIAS.values()}}), encoding="utf-8")
+    return str(p)
+
+
+SQL_CIA = ("SELECT * FROM {ESQUEMA_VENTAS}.doc d WHERE d.cia = :cia AND (:codigo_generacion IS NULL OR 1 = 1) "
+           "AND :desde IS NULL AND :hasta IS NULL FETCH FIRST NVL(:max_docs, 100) ROWS ONLY")
+
+
+def test_each_company_is_queried_in_its_own_schema(tmp_path):
+    conn = FakeConn()
+    sql = tmp_path / "q.sql"
+    sql.write_text(SQL_CIA, encoding="utf-8")
+    fetch([U1, U2], sql_path=str(sql), connector=lambda cfg: conn, companias=CIAS, cia_of={U1: "91", U2: "92"})
+    runs = [(b["codigo_generacion"], b["cia"]) for op, b in conn.log if op == "SELECT"]
+    assert runs == [(U1, "91"), (U2, "92")]
+    assert "FROM VENTASAAA.doc" in db_fetch.render_sql(SQL_CIA, "VENTASAAA")
+
+
+def test_query_needs_known_company_and_valid_schema(tmp_path):
+    sql = tmp_path / "q.sql"
+    sql.write_text(SQL_CIA, encoding="utf-8")
+    with pytest.raises(DbFetchError, match="Falta la compañía"):
+        fetch([U1], sql_path=str(sql), connector=lambda cfg: FakeConn(), companias=CIAS, cia_of={})
+    with pytest.raises(DbFetchError, match="sin esquema"):
+        fetch([U1], sql_path=str(sql), connector=lambda cfg: FakeConn(), companias=CIAS, cia_of={U1: "77"})
+    with pytest.raises(DbFetchError, match="inválido"):
+        db_fetch.render_sql(SQL_CIA, "VENTASSAL.doc; --")
+
+
+def test_real_query_uses_company_schema_and_cia():
+    sql = read_sql()
+    assert "{ESQUEMA_VENTAS}.doc" in sql and "d.cia = :cia" in sql
+    assert "ventassal." not in sql.lower()
+
+
+def test_real_companies_config():
+    from contract_validator.companias import load_companias
+    c = load_companias()
+    assert (c["53"].esquema, c["41"].esquema) == ("VENTASSAL", "VENTASSVC")
+
+
+def test_company_is_identified_from_document_files(tmp_path):
+    from contract_validator.companias import identify
+    from contract_validator.flatten import load_document
+    j = tmp_path / "d.json"
+    j.write_text(json.dumps({"identificacion": {"codigoGeneracion": U1}, "emisor": {"nit": "0000-000000-009-1"}}), encoding="utf-8")
+    x = tmp_path / "92_24_01_001_000001_000001_2026.xml"
+    x.write_text("<DatosEntrada/>", encoding="utf-8")
+    docs = {str(j): load_document(str(j))}
+    found, problems = identify({U1: [str(j)]}, docs, CIAS)
+    assert found[U1].esquema == "VENTASAAA" and not problems
+    found, problems = identify({U1: [str(j), str(x)]}, docs, CIAS)   # el XML dice 92 y el JSON 91
+    assert not found and "compañías distintas" in problems[U1]
+    found, problems = identify({U2: [str(tmp_path / "77_01_01_001.xml")]}, {}, CIAS)
+    assert "no está configurada" in problems[U2]
+    found, problems = identify({U2: [str(tmp_path / "otro.json")]}, {}, CIAS)
+    assert "no se pudo identificar" in problems[U2]
+
+
+def test_real_query_orders_items_like_the_generator():
+    sql = " ".join(read_sql().split())
+    assert ("ROW_NUMBER() OVER (PARTITION BY k.uuid ORDER BY CASE WHEN k.tipo_doc = 'FAC_EXP' THEN NULL ELSE v.padre END, "
+            "v.orden_facturas, v.articulo) n") in sql
+
+
+def test_real_query_builds_export_description_like_the_generator():
+    sql = " ".join(read_sql().split())
+    assert "ap.pais = NVL(d.pais_destino, su.pais)" in sql                       # país de destino del documento
+    assert "ELSE art.descripcion END" in sql                                     # sin ART_PAISES vigente: ART
+    assert "NVL2(ap.registro, ' | Registro sanitario: ' || ap.registro, NULL)" in sql  # segmento solo si hay valor
+    assert "NVL(ap.fabricante, art.nombre_fabricante)" in sql
